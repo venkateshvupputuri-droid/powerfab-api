@@ -14,6 +14,17 @@ npm run dev
 
 The API runs at `http://localhost:3000`.
 
+## Deploy to Render
+
+The repository includes `render.yaml`. In Render, choose **New > Blueprint**, connect the GitHub repository, and apply the blueprint. It creates a web service with a persistent 1 GB disk for SQLite. After deployment, use the generated service URL as the live API URL.
+
+To publish this repository to GitHub from PowerShell after creating `venkateshvupputuri-droid/powerfab-api`:
+
+```powershell
+git remote add origin https://github.com/venkateshvupputuri-droid/powerfab-api.git
+git push -u origin main
+```
+
 ## Endpoints
 
 - `GET /health` - health check
