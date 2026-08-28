@@ -1,0 +1,46 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum FabricationStatus {
+  PLANNED
+  IN_PROGRESS
+  QUALITY_CHECK
+  READY
+  COMPLETED
+  ON_HOLD
+}
+
+model ModelInstance {
+  id          String           @id @default(cuid())
+  qrCode      String           @unique @default(cuid())
+  modelNumber String
+  name        String
+  description String?
+  status      FabricationStatus @default(PLANNED)
+  location    String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  history     StatusHistory[]
+
+  @@index([modelNumber])
+  @@index([status])
+}
+
+model StatusHistory {
+  id         String           @id @default(cuid())
+  instanceId String
+  fromStatus FabricationStatus?
+  toStatus   FabricationStatus
+  note       String?
+  updatedBy  String?
+  createdAt  DateTime         @default(now())
+  instance   ModelInstance    @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  @@index([instanceId, createdAt])
+}
