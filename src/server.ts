@@ -12,6 +12,7 @@ const publicAppUrl = process.env.PUBLIC_APP_URL ?? `http://localhost:${port}`;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
 
 const statuses = Object.values(FabricationStatus);
 const instanceInput = z.object({

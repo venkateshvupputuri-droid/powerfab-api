@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PowerFab | Fabrication Control</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="PowerFab home"><span class="brand-mark">PF</span><span>PowerFab</span></a>
+      <div class="connection"><span id="connection-dot" class="dot"></span><span id="connection-label">Not connected</span></div>
+    </header>
+
+    <section class="hero">
+      <div>
+        <p class="eyebrow">FABRICATION CONTROL</p>
+        <h1>Track every model<br><em>through the floor.</em></h1>
+        <p class="lede">Connect to your PowerFab workspace, select a model, and update its fabrication status from one focused view.</p>
+      </div>
+      <button id="connect-button" class="primary-button" type="button">Connect to PowerFab <span aria-hidden="true">&#8594;</span></button>
+    </section>
+
+    <section id="workspace" class="workspace" aria-live="polite">
+      <div class="workspace-head">
+        <div><p class="eyebrow">MODEL REGISTER</p><h2>Select a model</h2></div>
+        <span id="model-count" class="count">0 models</span>
+      </div>
+      <label class="select-wrap" for="model-select"><span>Model instance</span><select id="model-select" disabled><option>Connect to load models</option></select></label>
+      <p id="message" class="message">Connect to PowerFab to load the current model list.</p>
+
+      <div id="model-panel" class="model-panel" hidden>
+        <div class="model-details">
+          <div class="detail-top"><div><p id="model-number" class="model-number"></p><h3 id="model-name"></h3></div><span id="status-badge" class="status-badge"></span></div>
+          <p id="model-description" class="description"></p>
+          <dl class="metadata"><div><dt>Location</dt><dd id="model-location"></dd></div><div><dt>QR identifier</dt><dd id="model-qr"></dd></div></dl>
+          <div class="actions"><label for="status-select">Update status</label><select id="status-select"></select><button id="update-button" class="secondary-button" type="button">Update status</button><button id="print-button" class="text-button" type="button">Print QR label</button></div>
+        </div>
+        <aside class="qr-card"><img id="qr-image" alt="QR code for selected model"><p>Scan this code to identify the model</p></aside>
+      </div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
