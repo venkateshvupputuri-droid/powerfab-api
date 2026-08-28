@@ -19,6 +19,7 @@ const instanceInput = z.object({
   modelNumber: z.string().trim().min(1),
   name: z.string().trim().min(1),
   description: z.string().trim().optional(),
+  site: z.string().trim().optional(),
   projectName: z.string().trim().optional(),
   plant: z.string().trim().optional(),
   unit: z.string().trim().optional(),
@@ -34,11 +35,11 @@ const statusInput = z.object({
 });
 
 const instanceSelect = {
-  id: true, qrCode: true, modelNumber: true, name: true, description: true, projectName: true, plant: true, unit: true, jobNumber: true, assemblyNumber: true,
+  id: true, qrCode: true, modelNumber: true, name: true, description: true, site: true, projectName: true, plant: true, unit: true, jobNumber: true, assemblyNumber: true,
   status: true, location: true, createdAt: true, updatedAt: true
 } as const;
 
-function presentInstance(instance: { id: string; qrCode: string; modelNumber: string; name: string; description: string | null; projectName: string | null; plant: string | null; unit: string | null; jobNumber: string | null; assemblyNumber: string | null; status: FabricationStatus; location: string | null; createdAt: Date; updatedAt: Date }) {
+function presentInstance(instance: { id: string; qrCode: string; modelNumber: string; name: string; description: string | null; site: string | null; projectName: string | null; plant: string | null; unit: string | null; jobNumber: string | null; assemblyNumber: string | null; status: FabricationStatus; location: string | null; createdAt: Date; updatedAt: Date }) {
   return {
     ...instance,
     qrImageUrl: `${publicAppUrl}/api/instances/${instance.qrCode}/qr`,
