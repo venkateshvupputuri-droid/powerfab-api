@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: powerfab-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run db:push && npm run build
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        value: file:/var/data/powerfab.db
+      - key: NODE_ENV
+        value: production
+      - key: PUBLIC_APP_URL
+        fromService:
+          type: web
+          name: powerfab-api
+          property: url
+    disk:
+      name: powerfab-data
+      mountPath: /var/data
+      sizeGB: 1
