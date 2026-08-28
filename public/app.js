@@ -28,7 +28,7 @@ function renderFilters() {
 }
 function renderAssemblies(instances) {
   const list = $('#assembly-list'); const items = $('#assembly-items'); list.hidden = !state.project;
-  $('#assembly-count').textContent = `${instances.length} assembly${instances.length === 1 ? '' : 'ies'}`;
+  $('#assembly-count').textContent = `${instances.length} ${instances.length === 1 ? 'assembly' : 'assemblies'}`;
   items.replaceChildren(...instances.map((instance) => { const item = document.createElement('button'); item.className = 'assembly-item'; item.type = 'button'; item.innerHTML = `<span><strong>${instance.assemblyNumber || instance.modelNumber}</strong><small>${instance.name} · ${formatStatus(instance.status)}</small></span><span aria-hidden="true">&#8594;</span>`; item.addEventListener('click', () => { state.selected = instance; renderInstance(); $('#model-panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }); return item; }));
   $('#model-count').textContent = `${instances.length} model${instances.length === 1 ? '' : 's'}`;
 }
