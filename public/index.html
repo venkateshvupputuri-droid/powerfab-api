@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PowerFab | Fabrication Control</title>
   <link rel="stylesheet" href="/styles.css">
+  <style>.filters{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.assembly-list{margin-top:32px;background:#fff;border:1px solid var(--line)}.list-head{display:flex;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line);color:var(--muted);font:500 11px 'DM Mono',monospace;text-transform:uppercase;letter-spacing:.08em}.assembly-item{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line);cursor:pointer}.assembly-item:last-child{border-bottom:0}.assembly-item:hover{background:#eef4e7}.assembly-item strong{display:block}.assembly-item small{display:block;margin-top:5px;color:var(--muted)}@media(max-width:700px){.filters{grid-template-columns:1fr}}</style>
 </head>
 <body>
   <main class="shell">
@@ -19,17 +20,19 @@
         <h1>Track every model<br><em>through the floor.</em></h1>
         <p class="lede">Connect to your PowerFab workspace, select a model, and update its fabrication status from one focused view.</p>
       </div>
-      <button id="connect-button" class="primary-button" type="button">Connect to PowerFab <span aria-hidden="true">&#8594;</span></button>
+      <button id="connect-button" class="primary-button" type="button">Connect PowerFab + database <span aria-hidden="true">&#8594;</span></button>
     </section>
 
     <section id="workspace" class="workspace" aria-live="polite">
       <div class="workspace-head">
-        <div><p class="eyebrow">MODEL REGISTER</p><h2>Select a model</h2></div>
+        <div><p class="eyebrow">PROJECT CONTROL</p><h2>Open a project</h2></div>
         <span id="model-count" class="count">0 models</span>
       </div>
-      <label class="select-wrap" for="model-select"><span>Model instance</span><select id="model-select" disabled><option>Connect to load models</option></select></label>
-      <p id="message" class="message">Connect to PowerFab to load the current model list.</p>
+      <label class="select-wrap" for="project-select"><span>Project</span><select id="project-select" disabled><option>Connect to load projects</option></select></label>
+      <div class="filters"><label class="select-wrap" for="plant-select"><span>Plant</span><select id="plant-select" disabled><option>All plants</option></select></label><label class="select-wrap" for="unit-select"><span>Unit</span><select id="unit-select" disabled><option>All units</option></select></label><label class="select-wrap" for="job-select"><span>Job</span><select id="job-select" disabled><option>All jobs</option></select></label></div>
+      <p id="message" class="message">Connect to PowerFab and its database to load projects.</p>
 
+      <div id="assembly-list" class="assembly-list" hidden><div class="list-head"><span>Assemblies under job</span><span id="assembly-count"></span></div><div id="assembly-items"></div></div>
       <div id="model-panel" class="model-panel" hidden>
         <div class="model-details">
           <div class="detail-top"><div><p id="model-number" class="model-number"></p><h3 id="model-name"></h3></div><span id="status-badge" class="status-badge"></span></div>

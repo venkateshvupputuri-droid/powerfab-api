@@ -22,6 +22,11 @@ model ModelInstance {
   modelNumber String
   name        String
   description String?
+  projectName String?
+  plant       String?
+  unit        String?
+  jobNumber   String?
+  assemblyNumber String?
   status      FabricationStatus @default(PLANNED)
   location    String?
   createdAt   DateTime         @default(now())
@@ -29,6 +34,7 @@ model ModelInstance {
   history     StatusHistory[]
 
   @@index([modelNumber])
+  @@index([projectName, plant, unit, jobNumber])
   @@index([status])
 }
 
