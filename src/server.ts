@@ -252,7 +252,15 @@ async function syncAssemblyStationToPowerFabTables(options: {
         ProductionGrossWeightEach,
         ProductionModelWeightEach,
         ProductionSurfaceAreaEach
-      ) VALUES (?, ?, 0, ?, 0, ?, ?, 1, 0, CURDATE(), 0, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?)` ,
+      ) VALUES (?, ?, 0, ?, 0, ?, ?, 1, 0, CURDATE(), 0, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        StationID = VALUES(StationID), PositionInRoute = VALUES(PositionInRoute),
+        TotalQuantity = VALUES(TotalQuantity), QuantityCompleted = VALUES(QuantityCompleted),
+        LastDateCompleted = VALUES(LastDateCompleted), PreviousStationID = VALUES(PreviousStationID),
+        NextStationID = VALUES(NextStationID), ProductionLengthEach = VALUES(ProductionLengthEach),
+        ProductionSquareMetersEach = VALUES(ProductionSquareMetersEach), ProductionWeightEach = VALUES(ProductionWeightEach),
+        ProductionGrossWeightEach = VALUES(ProductionGrossWeightEach), ProductionModelWeightEach = VALUES(ProductionModelWeightEach),
+        ProductionSurfaceAreaEach = VALUES(ProductionSurfaceAreaEach)` ,
       [
         Number(options.productionControlAssemblyID ?? record?.productionControlAssemblyID ?? 0) || 0,
         finalProductionControlId,
@@ -745,29 +753,8 @@ app.post('/api/assemblies/:qrCode/status', async (request, response) => {
     ]
   );
 
-  await syncAssemblyStationToPowerFabTables({
-    qrCode,
-    jobNumber: resolvedJobNumber,
-    assemblyMark: resolvedAssemblyMark,
-    productionControlID: assemblyMatch?.productionControlID,
-    productionControlAssemblyID: assemblyMatch?.productionControlAssemblyID,
-    stage,
-    stationId: station ? Number(station.StationID ?? 0) : null,
-    stationName: resolvedStationName,
-    routeName: resolvedRouteName,
-    routeOrder: route ? Number(route.routeOrder ?? 0) : Number(request.body?.routeOrder ?? 0),
-    scannedBy: String(request.body?.scannedBy ?? 'mobile-app'),
-    note: String(request.body?.note ?? `${stage} scan completed`),
-    assemblyQuantity: assemblyMatch?.assemblyQuantity,
-    assemblyWeightEach: assemblyMatch?.assemblyWeightEach,
-    grossAssemblyWeightEach: assemblyMatch?.grossAssemblyWeightEach,
-    assemblyLengthEach: assemblyMatch?.assemblyLengthEach,
-    assemblySquareMetersEach: assemblyMatch?.assemblySquareMetersEach,
-    assemblySurfaceAreaEach: assemblyMatch?.assemblySurfaceAreaEach
-  });
-
   const stationData = stationInput.data;
-  await mysqlConnection.query(
+  const [stationInsert] = await mysqlConnection.query(
     `INSERT INTO \`assembly_station_updates\` (
       qrCode, mainMark, pieceMark, sequenceValue, lotNumber, quantity, instanceNumber, app,
       inspectionFailures, completedBy, hours, minutes, batchId, workArea, weight, finish,
@@ -796,6 +783,27 @@ app.post('/api/assemblies/:qrCode/status', async (request, response) => {
     ]
   );
 
+  await syncAssemblyStationToPowerFabTables({
+    qrCode,
+    jobNumber: resolvedJobNumber,
+    assemblyMark: resolvedAssemblyMark,
+    productionControlID: assemblyMatch?.productionControlID,
+    productionControlAssemblyID: assemblyMatch?.productionControlAssemblyID,
+    stage,
+    stationId: station ? Number(station.StationID ?? 0) : null,
+    stationName: resolvedStationName,
+    routeName: resolvedRouteName,
+    routeOrder: route ? Number(route.routeOrder ?? 0) : Number(request.body?.routeOrder ?? 0),
+    scannedBy: String(request.body?.scannedBy ?? 'mobile-app'),
+    note: String(request.body?.note ?? `${stage} scan completed`),
+    assemblyQuantity: assemblyMatch?.assemblyQuantity,
+    assemblyWeightEach: assemblyMatch?.assemblyWeightEach,
+    grossAssemblyWeightEach: assemblyMatch?.grossAssemblyWeightEach,
+    assemblyLengthEach: assemblyMatch?.assemblyLengthEach,
+    assemblySquareMetersEach: assemblyMatch?.assemblySquareMetersEach,
+    assemblySurfaceAreaEach: assemblyMatch?.assemblySurfaceAreaEach
+  });
+
   const history = await mysqlConnection.query(
     'SELECT * FROM `assembly_scan_history` WHERE `qrCode` = ? ORDER BY `createdAt` ASC',
     [qrCode]
@@ -812,7 +820,7 @@ app.post('/api/assemblies/:qrCode/status', async (request, response) => {
 
   assemblyStatusStore.set(qrCode, { currentStage: stage, history: historyRows.map((row) => ({ stage: row.stage, updatedAt: row.createdAt })) });
 
-  response.json({ qrCode, currentStage: stage, history: historyRows, insertId: (inserted[0] as any).insertId ?? null });
+  response.json({ qrCode, currentStage: stage, history: historyRows, insertId: (stationInsert as any).insertId ?? null, saved: true });
 });
 
 app.get('/api/instances', async (request, response, next) => {
