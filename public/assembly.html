@@ -198,7 +198,7 @@
           project.plant ? `Plant: ${project.plant}` : null,
           project.unit ? `Unit: ${project.unit}` : null,
           project.jobLocation ? `Location: ${project.jobLocation}` : null,
-          `Assemblies: ${project.assemblyCount ?? 0}`
+          `Main Mark Qty: ${project.assemblyCount ?? 0}`
         ].filter(Boolean).map((item) => `<span>${item}</span>`).join('');
 
         const allAssemblyRows = Array.isArray(project.assemblies) ? project.assemblies : [];

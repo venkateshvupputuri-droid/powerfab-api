@@ -590,8 +590,9 @@ app.get('/api/project-detail', async (request, response) => {
       };
     });
 
-    const liveAssemblyCount = Number(productionControl?.NumberOfItems ?? 0);
-    const projectAssemblyCount = liveAssemblyCount > 0 ? liveAssemblyCount : assemblyList.length || (projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `productioncontrolassemblies` WHERE `ProductionControlID` = ?', [productionControlId || 0]) : 0);
+    const projectAssemblyCount = productionControlId
+      ? await getSingleValue('SELECT COALESCE(SUM(`AssemblyQuantity`), 0) AS total FROM `productioncontrolassemblies` WHERE `ProductionControlID` = ?', [productionControlId])
+      : 0;
     const drawingCount = projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `drawings` WHERE `ProjectID` = ?', [projectId]) : 0;
     const sequenceCount = productionControlId ? await getSingleValue('SELECT COUNT(*) AS total FROM `productioncontrolsequences` WHERE `ProductionControlID` = ?', [productionControlId]) : 0;
     const categoryCount = projectId ? await getSingleValue('SELECT COUNT(DISTINCT CategoryID) AS total FROM `productioncontrolitems` WHERE `ProductionControlID` = ?', [productionControlId || 0]) : 0;
