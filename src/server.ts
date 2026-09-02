@@ -911,7 +911,7 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
 
 ensureAssemblyScanTables().catch((error) => console.error('Unable to initialize assembly_scan_history tables', error));
 
-const server = app.listen(port, () => console.log(`PowerFab API listening on ${publicAppUrl}`));
+const server = app.listen(port, '0.0.0.0', () => console.log(`PowerFab API listening on ${publicAppUrl}`));
 
 process.on('SIGINT', async () => { server.close(); await prisma.$disconnect(); });
 process.on('SIGTERM', async () => { server.close(); await prisma.$disconnect(); });
