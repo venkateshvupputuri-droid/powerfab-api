@@ -3,46 +3,83 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PowerFab | Fabrication Control</title>
+  <title>Tekla PowerFab Go</title>
   <link rel="stylesheet" href="/styles.css">
-  <style>.filters{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.assembly-list{margin-top:32px;background:#fff;border:1px solid var(--line)}.list-head{display:flex;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line);color:var(--muted);font:500 11px 'DM Mono',monospace;text-transform:uppercase;letter-spacing:.08em}.assembly-item{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line);cursor:pointer}.assembly-item:last-child{border-bottom:0}.assembly-item:hover{background:#eef4e7}.assembly-item strong{display:block}.assembly-item small{display:block;margin-top:5px;color:var(--muted)}@media(max-width:700px){.filters{grid-template-columns:1fr}}</style>
 </head>
 <body>
-  <main class="shell">
+  <div class="page-shell">
     <header class="topbar">
-      <a class="brand" href="/" aria-label="PowerFab home"><span class="brand-mark">PF</span><span>PowerFab</span></a>
-      <div class="connection"><span id="connection-dot" class="dot"></span><span id="connection-label">Not connected</span></div>
+      <div class="topbar-left">
+        <button class="menu-button" type="button" aria-label="Open menu">☰</button>
+        <div class="brand" aria-label="Tekla PowerFab Go">
+          <div class="brand-mark" aria-hidden="true">
+            <span class="brand-mark-inner"></span>
+          </div>
+          <div class="brand-text">
+            <span class="tekla">Tekla</span>
+            <span class="powerfab">PowerFab</span>
+            <span class="go">Go</span>
+          </div>
+        </div>
+      </div>
+      <button class="user-button" type="button" aria-label="User profile">◔</button>
     </header>
 
-    <section class="hero">
-      <div>
-        <p class="eyebrow">FABRICATION CONTROL</p>
-        <h1>Track every model<br><em>through the floor.</em></h1>
-        <p class="lede">Connect to your PowerFab workspace, select a model, and update its fabrication status from one focused view.</p>
-      </div>
-      <button id="connect-button" class="primary-button" type="button">Connect PowerFab + database <span aria-hidden="true">&#8594;</span></button>
-    </section>
+    <main class="content-panel">
+      <div class="landing-actions">
+        <button id="projects-open" class="primary-action" type="button">
+          Projects
+        </button>
 
-    <section id="workspace" class="workspace" aria-live="polite">
-      <div class="workspace-head">
-        <div><p class="eyebrow">FABRICATION CONTROL</p><h2>Select assemblies</h2></div>
-        <span id="model-count" class="count">0 models</span>
+        <button id="connect-powerfab" class="secondary-action" type="button">
+          Connect PowerFab
+        </button>
       </div>
-      <div class="filters"><label class="select-wrap" for="site-select"><span>Site</span><select id="site-select" disabled><option>Connect to load sites</option></select></label><label class="select-wrap" for="plant-select"><span>Plant</span><select id="plant-select" disabled><option>Select a site first</option></select></label><label class="select-wrap" for="unit-select"><span>Unit</span><select id="unit-select" disabled><option>Select a plant first</option></select></label><label class="select-wrap" for="job-select"><span>Job</span><select id="job-select" disabled><option>Select a unit first</option></select></label></div>
-      <p id="message" class="message">Connect to PowerFab and its database to load sites.</p>
+    </main>
 
-      <div id="assembly-list" class="assembly-list" hidden><div class="list-head"><span>Assemblies under job</span><span id="assembly-count"></span></div><div id="assembly-items"></div></div>
-      <div id="model-panel" class="model-panel" hidden>
-        <div class="model-details">
-          <div class="detail-top"><div><p id="model-number" class="model-number"></p><h3 id="model-name"></h3></div><span id="status-badge" class="status-badge"></span></div>
-          <p id="model-description" class="description"></p>
-          <dl class="metadata"><div><dt>Location</dt><dd id="model-location"></dd></div><div><dt>QR identifier</dt><dd id="model-qr"></dd></div></dl>
-          <div class="actions"><label for="status-select">Update status</label><select id="status-select"></select><button id="update-button" class="secondary-button" type="button">Update status</button><button id="print-button" class="text-button" type="button">Print QR label</button></div>
+    <section id="projects-page" class="projects-page hidden" aria-live="polite">
+      <div class="toolbar">
+        <div class="toolbar-icon" aria-hidden="true">☰</div>
+
+        <label class="field-control">
+          <span class="sr-only">Site</span>
+          <select id="toolbar-site-select">
+            <option value="">Site (job location)</option>
+          </select>
+        </label>
+
+        <label class="field-control">
+          <span class="sr-only">Plant</span>
+          <select id="toolbar-plant-select">
+            <option value="">Plant from (group)</option>
+          </select>
+        </label>
+
+        <label class="field-control">
+          <span class="sr-only">Unit</span>
+          <select id="toolbar-unit-select">
+            <option value="">Unit from (group2)</option>
+          </select>
+        </label>
+
+        <label class="field-control field-control-search">
+          <span class="sr-only">Find Job</span>
+          <input id="job-search" type="text" placeholder="Find Job..." autocomplete="off">
+        </label>
+      </div>
+
+      <div class="job-table" role="table" aria-label="Projects table">
+        <div class="table-head" role="row">
+          <span role="columnheader">Job No.</span>
+          <span role="columnheader">Description</span>
+          <span role="columnheader">Location</span>
         </div>
-        <aside class="qr-card"><img id="qr-image" alt="QR code for selected model"><p>Scan this code to identify the model</p></aside>
+
+        <div id="job-rows" class="job-rows"></div>
       </div>
     </section>
-  </main>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>

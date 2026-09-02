@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Assembly Scan</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="detail-page">
+  <div class="page-shell project-shell">
+    <header class="topbar detail-topbar">
+      <div class="topbar-left">
+        <button class="menu-button" type="button" aria-label="Open menu">☰</button>
+        <div class="brand" aria-label="Tekla PowerFab Go">
+          <div class="brand-mark" aria-hidden="true"><span class="brand-mark-inner"></span></div>
+          <div class="brand-text">
+            <span class="tekla">Tekla</span>
+            <span class="powerfab">PowerFab</span>
+            <span class="go">Go</span>
+          </div>
+        </div>
+      </div>
+      <button class="user-button" type="button" aria-label="User profile">◔</button>
+    </header>
+
+    <main class="detail-content">
+      <div class="scan-shell">
+        <h1 class="project-title">Assembly Scan</h1>
+
+        <div class="scan-card">
+          <label class="scan-label" for="scan-qr-input">Scan or enter QR code</label>
+          <div class="scan-input-row">
+            <input id="scan-qr-input" type="text" placeholder="Scan QR or paste code" autocomplete="off" />
+            <button id="scan-camera-btn" type="button" class="secondary-button">Camera</button>
+          </div>
+          <button id="scan-submit" type="button" class="scan-button">Load Assembly</button>
+        </div>
+
+        <div id="camera-panel" class="camera-panel hidden">
+          <video id="camera-video" autoplay playsinline muted></video>
+          <button id="camera-stop" type="button" class="secondary-button">Stop Camera</button>
+        </div>
+
+        <div class="scan-result hidden" id="scan-result">
+          <div class="scan-status-row">
+            <span class="scan-status-label">Assembly</span>
+            <strong id="scan-assembly-mark">—</strong>
+          </div>
+          <div class="scan-status-row">
+            <span class="scan-status-label">Current Stage</span>
+            <strong id="scan-current-stage">—</strong>
+          </div>
+          <div class="scan-status-row">
+            <span class="scan-status-label">Job</span>
+            <strong id="scan-job-number">—</strong>
+          </div>
+
+          <div class="station-form-grid">
+            <label>Main Mark<input name="mainMark" value="A1"></label>
+            <label>Piece Mark<input name="pieceMark" value="A1"></label>
+            <label>Sequence<input name="sequenceValue" value="1"></label>
+            <label>Lot No.<input name="lotNumber" value="3"></label>
+            <label>Quantity<input name="quantity" type="number" min="0" step="any" value=""></label>
+            <label>Instance No.<input name="instanceNumber" placeholder="3-8"></label>
+            <label>App<input name="app" value="A"></label>
+            <label>Inspection Failures<input name="inspectionFailures" type="number" min="0" step="1" value="0"></label>
+            <label>Completed By<input name="completedBy" placeholder="Operator name"></label>
+            <label>Hours<input name="hours" type="number" min="0" step="any" value="0"></label>
+            <label>Minutes<input name="minutes" type="number" min="0" step="any" value="0"></label>
+            <label>Batch ID<input name="batchId"></label>
+            <label>Work Area<input name="workArea" value="Main"></label>
+            <label>Weight<input name="weight" placeholder="19Kg each"></label>
+            <label>Finish<input name="finish" value="GLV"></label>
+            <label>Next station<input name="nextStation" placeholder="Sample - Layout/Weld"></label>
+            <label class="station-form-wide">Remark<input name="remark" value="Field"></label>
+          </div>
+
+          <label class="station-check"><input name="includeIfPreviousStationNotCompleted" type="checkbox"> Include if previous station not completed</label>
+          <label class="scan-label" for="scan-stage-select">Update station / stage</label>
+          <select id="scan-stage-select" class="stage-select scan-stage-select">
+            <option value="">Select stage</option>
+            <option value="Fitup">Fitup</option>
+            <option value="Inspection">Inspection</option>
+            <option value="Shifting to Paint">Shifting to Paint</option>
+            <option value="Painting">Painting</option>
+            <option value="Laydown">Laydown</option>
+            <option value="Shifting to Site">Shifting to Site</option>
+          </select>
+
+          <button id="scan-update" type="button" class="detail-button scan-update-btn">Save Station Update</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const jobNumber = params.get('job') || '';
+    const qrFromUrl = params.get('qr') || '';
+
+    const qrInput = document.getElementById('scan-qr-input');
+    const resultBox = document.getElementById('scan-result');
+    const assemblyMark = document.getElementById('scan-assembly-mark');
+    const currentStage = document.getElementById('scan-current-stage');
+    const jobField = document.getElementById('scan-job-number');
+    const stageSelect = document.getElementById('scan-stage-select');
+    const submitButton = document.getElementById('scan-submit');
+    const updateButton = document.getElementById('scan-update');
+    const cameraButton = document.getElementById('scan-camera-btn');
+    const cameraPanel = document.getElementById('camera-panel');
+    const cameraVideo = document.getElementById('camera-video');
+    const cameraStopButton = document.getElementById('camera-stop');
+    const stationForm = document.querySelector('.station-form-grid');
+
+    let activeQrCode = '';
+    let cameraStream = null;
+    let scanTimer = null;
+
+    function getStationData() {
+      return Object.fromEntries([...stationForm.querySelectorAll('input[name]')].map((input) => [
+        input.name,
+        input.type === 'checkbox' ? input.checked : input.value.trim()
+      ]));
+    }
+
+    function setStationData(data) {
+      if (!data) return;
+      stationForm.querySelectorAll('input[name]').forEach((input) => {
+        if (data[input.name] === null || data[input.name] === undefined) return;
+        if (input.type === 'checkbox') input.checked = Boolean(data[input.name]);
+        else input.value = data[input.name];
+      });
+    }
+
+    function stopCamera() {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach((track) => track.stop());
+        cameraStream = null;
+      }
+      if (cameraVideo) {
+        cameraVideo.srcObject = null;
+      }
+      if (cameraPanel) {
+        cameraPanel.classList.add('hidden');
+      }
+      if (scanTimer) {
+        clearInterval(scanTimer);
+        scanTimer = null;
+      }
+    }
+
+    async function startCameraScan() {
+      if (!('BarcodeDetector' in window) && !navigator.mediaDevices?.getUserMedia) {
+        alert('Camera scanning is not supported in this browser. Please enter the QR code manually.');
+        return;
+      }
+
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+          audio: false
+        });
+
+        cameraPanel.classList.remove('hidden');
+        cameraVideo.srcObject = cameraStream;
+        await cameraVideo.play();
+
+        if (!('BarcodeDetector' in window)) {
+          alert('This browser supports camera preview but not built-in QR scanning. Please type the QR code manually.');
+          return;
+        }
+
+        const detector = new BarcodeDetector({ formats: ['qr_code'] });
+        scanTimer = setInterval(async () => {
+          try {
+            const barcodes = await detector.detect(cameraVideo);
+            if (barcodes && barcodes.length > 0) {
+              const detected = barcodes[0]?.rawValue || '';
+              if (detected) {
+                qrInput.value = detected;
+                stopCamera();
+                await loadAssemblyByQr();
+              }
+            }
+          } catch (error) {
+            console.warn('QR detection failed', error);
+          }
+        }, 800);
+      } catch (error) {
+        console.error(error);
+        alert('Unable to access the camera. Please type the QR code manually.');
+      }
+    }
+
+    async function loadAssemblyByQr() {
+      const qrCode = (qrInput.value || '').trim();
+      if (!qrCode) {
+        alert('Please scan or enter a QR code.');
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/assemblies/${encodeURIComponent(qrCode)}/status`);
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || 'Unable to find assembly QR code.');
+        }
+
+        activeQrCode = qrCode;
+        assemblyMark.textContent = payload.assemblyMark || payload.qrCode || 'Unknown assembly';
+        currentStage.textContent = payload.currentStage || 'Fitup';
+        jobField.textContent = payload.jobNumber || jobNumber || 'N/A';
+        resultBox.classList.remove('hidden');
+        stageSelect.value = payload.currentStage || '';
+        setStationData(payload.stationData || {
+          mainMark: payload.assemblyMark || '',
+          pieceMark: payload.assemblyMark || ''
+        });
+      } catch (error) {
+        console.error(error);
+        alert(error.message || 'QR code not found.');
+      }
+    }
+
+    submitButton.addEventListener('click', loadAssemblyByQr);
+    cameraButton.addEventListener('click', startCameraScan);
+    cameraStopButton.addEventListener('click', stopCamera);
+    qrInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        loadAssemblyByQr();
+      }
+    });
+
+    updateButton.addEventListener('click', async () => {
+      const nextStage = stageSelect.value;
+      if (!activeQrCode || !nextStage) {
+        alert('Scan an assembly first and choose a stage.');
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/assemblies/${encodeURIComponent(activeQrCode)}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            stage: nextStage,
+            stationData: getStationData(),
+            jobNumber: jobField.textContent !== 'N/A' ? jobField.textContent : (jobNumber || ''),
+            scannedBy: 'mobile-user',
+            note: `Station update via mobile scan: ${nextStage}`
+          })
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || 'Failed to save station update.');
+        }
+
+        currentStage.textContent = payload.currentStage || nextStage;
+        stageSelect.value = payload.currentStage || nextStage;
+        alert(`Station update saved: ${payload.currentStage}`);
+      } catch (error) {
+        console.error(error);
+        alert(error.message || 'Unable to save station update.');
+      }
+    });
+
+    if (qrFromUrl) {
+      qrInput.value = qrFromUrl;
+      loadAssemblyByQr();
+    } else if (jobNumber) {
+      qrInput.focus();
+    }
+  </script>
+</body>
+</html>

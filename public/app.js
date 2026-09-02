@@ -1,57 +1,111 @@
-const state = { instances: [], statuses: [], selected: null };
-const $ = (selector) => document.querySelector(selector);
-const connectButton = $('#connect-button');
-const siteSelect = $('#site-select');
-const plantSelect = $('#plant-select');
-const unitSelect = $('#unit-select');
-const jobSelect = $('#job-select');
-const statusSelect = $('#status-select');
-function formatStatus(status) { return status.replaceAll('_', ' '); }
-function setMessage(text) { $('#message').textContent = text; }
-function valuesFor(field, instances) { return [...new Set(instances.map((instance) => instance[field]).filter(Boolean))].sort(); }
-function fillSelect(select, values, emptyLabel) { select.replaceChildren(new Option(emptyLabel, ''), ...values.map((value) => new Option(value, value))); select.disabled = values.length === 0; }
-function scope() { return state.instances.filter((instance) => (!siteSelect.value || instance.site === siteSelect.value) && (!plantSelect.value || instance.plant === plantSelect.value) && (!unitSelect.value || instance.unit === unitSelect.value) && (!jobSelect.value || instance.jobNumber === jobSelect.value)); }
-function refreshFilters() {
-  const selectedSite = siteSelect.value;
-  const selectedPlant = plantSelect.value;
-  const selectedUnit = unitSelect.value;
-  const selectedJob = jobSelect.value;
-  const sites = state.instances;
-  fillSelect(siteSelect, valuesFor('site', sites), 'Select a site');
-  siteSelect.value = selectedSite;
-  const siteInstances = sites.filter((instance) => !siteSelect.value || instance.site === siteSelect.value);
-  fillSelect(plantSelect, valuesFor('plant', siteInstances), 'Select a plant');
-  plantSelect.value = selectedPlant;
-  const plantInstances = siteInstances.filter((instance) => !plantSelect.value || instance.plant === plantSelect.value);
-  fillSelect(unitSelect, valuesFor('unit', plantInstances), 'Select a unit');
-  unitSelect.value = selectedUnit;
-  const unitInstances = plantInstances.filter((instance) => !unitSelect.value || instance.unit === unitSelect.value);
-  fillSelect(jobSelect, valuesFor('jobNumber', unitInstances), 'Select a job');
-  jobSelect.value = selectedJob;
-  renderAssemblies(scope());
-}
-function renderAssemblies(instances) {
-  $('#assembly-list').hidden = !jobSelect.value;
-  $('#assembly-count').textContent = `${instances.length} ${instances.length === 1 ? 'assembly' : 'assemblies'}`;
-  $('#model-count').textContent = `${instances.length} model${instances.length === 1 ? '' : 's'}`;
-  $('#assembly-items').replaceChildren(...instances.map((instance) => { const item = document.createElement('button'); item.className = 'assembly-item'; item.type = 'button'; item.innerHTML = `<span><strong>${instance.assemblyNumber || instance.modelNumber}</strong><small>${instance.name} · ${formatStatus(instance.status)}</small></span><span aria-hidden="true">&#8594;</span>`; item.addEventListener('click', () => { state.selected = instance; renderInstance(); $('#model-panel').scrollIntoView({ behavior: 'smooth' }); }); return item; }));
-}
-function renderInstance() {
-  const instance = state.selected; if (!instance) { $('#model-panel').hidden = true; return; }
-  $('#model-panel').hidden = false; $('#model-number').textContent = instance.assemblyNumber || instance.modelNumber; $('#model-name').textContent = instance.name; $('#model-description').textContent = instance.description || 'No description provided.'; $('#model-location').textContent = [instance.site, instance.plant, instance.unit, instance.location].filter(Boolean).join(' / '); $('#model-qr').textContent = instance.qrCode; $('#status-badge').textContent = formatStatus(instance.status); $('#qr-image').src = instance.qrImageUrl; statusSelect.value = instance.status;
-}
-async function connect() {
-  connectButton.disabled = true; connectButton.innerHTML = 'Connecting <span aria-hidden="true">...</span>';
-  try { const health = await fetch('/health'); if (!health.ok) throw new Error('PowerFab database is unavailable'); const [instances, statuses] = await Promise.all([fetch('/api/instances'), fetch('/api/statuses')]); if (!instances.ok || !statuses.ok) throw new Error('Unable to load PowerFab data'); state.instances = (await instances.json()).instances; state.statuses = (await statuses.json()).statuses; statusSelect.replaceChildren(...state.statuses.map((status) => new Option(formatStatus(status), status))); refreshFilters(); $('#connection-dot').classList.add('live'); $('#connection-label').textContent = 'Connected'; connectButton.innerHTML = 'PowerFab connected <span aria-hidden="true">&#10003;</span>'; setMessage('Select a site, plant, unit, and job to show assemblies.'); } catch (error) { setMessage(error.message); connectButton.disabled = false; connectButton.innerHTML = 'Try again <span aria-hidden="true">&#8594;</span>'; }
-}
-async function updateStatus() {
-  if (!state.selected) return; const button = $('#update-button'); button.disabled = true; button.textContent = 'Updating...';
-  try { const response = await fetch(`/api/instances/${state.selected.qrCode}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: statusSelect.value, updatedBy: 'PowerFab dashboard' }) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Status update failed'); state.selected = result; state.instances = state.instances.map((instance) => instance.qrCode === result.qrCode ? result : instance); refreshFilters(); renderInstance(); setMessage(`Status updated to ${formatStatus(result.status)}.`); } catch (error) { setMessage(error.message); } button.disabled = false; button.textContent = 'Update status';
-}
-connectButton.addEventListener('click', connect);
-siteSelect.addEventListener('change', () => { plantSelect.value = ''; unitSelect.value = ''; jobSelect.value = ''; state.selected = null; refreshFilters(); renderInstance(); });
-plantSelect.addEventListener('change', () => { unitSelect.value = ''; jobSelect.value = ''; state.selected = null; refreshFilters(); renderInstance(); });
-unitSelect.addEventListener('change', () => { jobSelect.value = ''; state.selected = null; refreshFilters(); renderInstance(); });
-jobSelect.addEventListener('change', () => { state.selected = null; renderAssemblies(scope()); renderInstance(); });
-$('#update-button').addEventListener('click', updateStatus);
-$('#print-button').addEventListener('click', () => { if (state.selected) window.open(state.selected.printUrl, '_blank', 'noopener'); });
+document.addEventListener('DOMContentLoaded', () => {
+  const rowsContainer = document.getElementById('job-rows');
+  const toolbarSiteSelect = document.getElementById('toolbar-site-select');
+  const toolbarPlantSelect = document.getElementById('toolbar-plant-select');
+  const toolbarUnitSelect = document.getElementById('toolbar-unit-select');
+  const searchInput = document.getElementById('job-search');
+  const connectButton = document.getElementById('connect-powerfab');
+  const projectsOpen = document.getElementById('projects-open');
+  const projectsPage = document.getElementById('projects-page');
+
+  const state = {
+    allProjects: [],
+    currentSelection: null
+  };
+
+  function syncSelectOptions(source, target) {
+    const values = [...new Set(source.map((item) => item).filter(Boolean))].sort();
+    target.innerHTML = '<option value="">Select option</option>' + values.map((value) => `<option value="${value}">${value}</option>`).join('');
+  }
+
+  function renderProjects() {
+    const siteValue = (toolbarSiteSelect.value || '').trim();
+    const plantValue = (toolbarPlantSelect.value || '').trim();
+    const unitValue = (toolbarUnitSelect.value || '').trim();
+    const q = (searchInput.value || '').trim().toLowerCase();
+
+    const filtered = state.allProjects.filter((project) => {
+      const matchesSite = !siteValue || (project.site || '').toLowerCase() === siteValue.toLowerCase();
+      const matchesPlant = !plantValue || (project.plant || '').toLowerCase() === plantValue.toLowerCase();
+      const matchesUnit = !unitValue || (project.unit || '').toLowerCase() === unitValue.toLowerCase();
+      const searchText = `${project.jobNumber || ''} ${project.name || ''} ${project.description || ''} ${project.location || ''}`.toLowerCase();
+      const matchesSearch = !q || searchText.includes(q);
+      return matchesSite && matchesPlant && matchesUnit && matchesSearch;
+    });
+
+    rowsContainer.innerHTML = filtered.map((project) => `
+      <div class="table-row job-row ${state.currentSelection === project.jobNumber ? 'selected' : ''}" data-job-no="${project.jobNumber || ''}" data-description="${(project.description || project.name || '').replace(/\"/g, '&quot;')}" data-location="${project.location || ''}" role="row">
+        <span>${project.jobNumber || '—'}</span>
+        <span>${project.description || project.name || '—'}</span>
+        <span>${project.location || '—'}</span>
+        <button type="button" class="open-project">Open Project</button>
+      </div>
+    `).join('');
+
+    rowsContainer.querySelectorAll('.open-project').forEach((button) => {
+      button.addEventListener('click', () => {
+        const row = button.closest('.job-row');
+        const jobNumber = row.dataset.jobNo || '';
+        state.currentSelection = jobNumber;
+        renderProjects();
+
+        if (jobNumber) {
+          const targetUrl = `/project.html?job=${encodeURIComponent(jobNumber)}`;
+          window.open(targetUrl, '_blank', 'noopener,noreferrer');
+        }
+      });
+    });
+  }
+
+  function populateFilters(projects) {
+    const sites = [...new Set(projects.map((project) => project.site).filter(Boolean))];
+    const plants = [...new Set(projects.map((project) => project.plant).filter(Boolean))];
+    const units = [...new Set(projects.map((project) => project.unit).filter(Boolean))];
+
+    syncSelectOptions(sites, toolbarSiteSelect);
+    syncSelectOptions(plants, toolbarPlantSelect);
+    syncSelectOptions(units, toolbarUnitSelect);
+  }
+
+  function bindFilterChanges() {
+    [toolbarSiteSelect, toolbarPlantSelect, toolbarUnitSelect].forEach((element) => {
+      element.addEventListener('change', renderProjects);
+    });
+
+    searchInput.addEventListener('input', renderProjects);
+  }
+
+  projectsOpen.addEventListener('click', () => {
+    document.querySelector('.landing-actions').classList.add('hidden');
+    projectsPage.classList.remove('hidden');
+  });
+
+  bindFilterChanges();
+
+  connectButton.addEventListener('click', async () => {
+    connectButton.disabled = true;
+    connectButton.textContent = 'Connecting...';
+
+    try {
+      const response = await fetch('/api/projects');
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.error || 'Unable to load PowerFab data');
+      }
+
+      state.allProjects = Array.isArray(payload.projects) ? payload.projects : [];
+      populateFilters(state.allProjects);
+      renderProjects();
+      connectButton.textContent = 'Connected';
+      connectButton.classList.add('is-connected');
+    } catch (error) {
+      console.error(error);
+      connectButton.textContent = 'Retry PowerFab';
+      connectButton.disabled = false;
+      alert(error.message || 'Unable to connect to PowerFab. Check the API server and database connection.');
+    }
+  });
+
+  rowsContainer.innerHTML = '<div class="empty-state">Connect to PowerFab to load projects.</div>';
+});

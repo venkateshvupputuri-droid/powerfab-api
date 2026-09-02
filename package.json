@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/src/server.js",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "test": "tsx --test"
@@ -16,6 +16,7 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
+    "mysql2": "^3.24.2",
     "qrcode": "^1.5.4",
     "zod": "^4.0.17"
   },

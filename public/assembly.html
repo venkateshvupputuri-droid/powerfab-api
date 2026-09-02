@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assemblies</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="detail-page">
+  <div class="page-shell project-shell">
+    <header class="topbar detail-topbar">
+      <div class="topbar-left">
+        <button class="menu-button" type="button" aria-label="Open menu">☰</button>
+        <div class="brand" aria-label="Tekla PowerFab Go">
+          <div class="brand-mark" aria-hidden="true">
+            <span class="brand-mark-inner"></span>
+          </div>
+          <div class="brand-text">
+            <span class="tekla">Tekla</span>
+            <span class="powerfab">PowerFab</span>
+            <span class="go">Go</span>
+          </div>
+        </div>
+      </div>
+      <button class="user-button" type="button" aria-label="User profile">◔</button>
+    </header>
+
+    <nav class="project-nav" aria-label="Project sections">
+      <button type="button" class="project-nav-item">OVERVIEW</button>
+      <button type="button" class="project-nav-item active">ASSEMBLIES</button>
+      <button type="button" class="project-nav-item">DRAWINGS</button>
+      <button type="button" class="project-nav-item">SEQUENCES</button>
+      <button type="button" class="project-nav-item">CATEGORIES</button>
+      <button type="button" class="project-nav-item">INSPECTIONS</button>
+      <button type="button" class="project-nav-item">INSPECTION TEST RECORDS</button>
+      <button type="button" class="project-nav-item">PREPARED CUT LISTS</button>
+      <button type="button" class="project-nav-item">MATERIAL STATUS</button>
+    </nav>
+
+    <main class="detail-content">
+      <h1 id="assembly-title" class="project-title">Loading assemblies...</h1>
+      <div id="assembly-meta" class="project-meta" aria-live="polite"></div>
+
+      <div class="assembly-toolbar">
+        <div class="assembly-toolbar-title">Search</div>
+        <input id="assembly-search" type="text" placeholder="Search..." aria-label="Search assemblies">
+        <button type="button" id="scan-assembly-btn" class="scan-button">Scan QR</button>
+      </div>
+
+      <section class="assembly-table-wrap">
+        <table class="assembly-table">
+          <thead>
+            <tr>
+              <th>Main Mark</th>
+              <th>Drawing No</th>
+              <th>Assy Qty</th>
+              <th>Weight</th>
+              <th>Current Stage</th>
+              <th>QR</th>
+              <th>Print</th>
+            </tr>
+          </thead>
+          <tbody id="assembly-rows"></tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const fabricationStages = ['Fitup', 'Inspection', 'Shifting to Paint', 'Painting', 'Laydown', 'Shifting to Site'];
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function formatWeight(value) {
+      const amount = Number(value ?? 0);
+      return `${amount.toLocaleString(undefined, { maximumFractionDigits: 2 })} kg`;
+    }
+
+    function printAssemblyQr(qrCode, mainMark) {
+      const printWindow = window.open('', '_blank', 'width=540,height=760');
+      if (!printWindow) {
+        alert('Please allow pop-ups to print the QR code.');
+        return;
+      }
+
+      const safeLabel = escapeHtml(mainMark || 'Assembly');
+      const qrImageUrl = `/api/assemblies/${encodeURIComponent(qrCode)}/qr`;
+
+      printWindow.document.write(`
+        <!doctype html>
+        <html>
+          <head>
+            <title>Print QR - ${safeLabel}</title>
+            <style>
+              body {
+                margin: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+                background: #fff;
+                color: #1b1b1b;
+                font-family: Arial, sans-serif;
+              }
+              .qr-card {
+                width: 360px;
+                padding: 24px 18px 18px;
+                border: 2px solid #0d6ea7;
+                border-radius: 12px;
+                text-align: center;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+              }
+              .qr-card img {
+                display: block;
+                width: 230px;
+                height: 230px;
+                margin: 10px auto 18px;
+              }
+              .qr-title {
+                font-size: 18px;
+                font-weight: 700;
+                margin-bottom: 8px;
+              }
+              .qr-code {
+                font-size: 13px;
+                color: #3a3a3a;
+                word-break: break-all;
+              }
+              @media print {
+                body { background: #fff; }
+                .qr-card { box-shadow: none; border: 1px solid #222; }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="qr-card">
+              <div class="qr-title">${safeLabel}</div>
+              <img src="${qrImageUrl}" alt="QR code for ${safeLabel}" />
+              <div class="qr-code">${escapeHtml(qrCode)}</div>
+            </div>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+      setTimeout(() => {
+        printWindow.focus();
+        printWindow.print();
+      }, 250);
+    }
+
+    async function updateAssemblyStage(qrCode, selectElement) {
+      const stage = selectElement.value;
+      try {
+        const response = await fetch(`/api/assemblies/${encodeURIComponent(qrCode)}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stage, jobNumber: new URLSearchParams(window.location.search).get('job') || '' })
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || 'Failed to update stage');
+        }
+        selectElement.value = payload.currentStage;
+      } catch (error) {
+        console.error(error);
+        alert(error.message || 'Unable to update assembly stage.');
+      }
+    }
+
+    async function loadAssemblyData() {
+      const params = new URLSearchParams(window.location.search);
+      const jobNumber = params.get('job');
+      const title = document.getElementById('assembly-title');
+      const meta = document.getElementById('assembly-meta');
+      const rows = document.getElementById('assembly-rows');
+      const searchInput = document.getElementById('assembly-search');
+
+      if (!jobNumber) {
+        title.textContent = 'Assembly not selected';
+        meta.textContent = 'No job was provided.';
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/project-detail?job=${encodeURIComponent(jobNumber)}`);
+        const payload = await response.json();
+        const project = payload.project;
+
+        title.textContent = `${project.jobNumber || jobNumber} Assemblies`;
+        meta.innerHTML = [
+          project.plant ? `Plant: ${project.plant}` : null,
+          project.unit ? `Unit: ${project.unit}` : null,
+          project.jobLocation ? `Location: ${project.jobLocation}` : null,
+          `Assemblies: ${project.assemblyCount ?? 0}`
+        ].filter(Boolean).map((item) => `<span>${item}</span>`).join('');
+
+        const allAssemblyRows = Array.isArray(project.assemblies) ? project.assemblies : [];
+        const renderRows = (items) => {
+          if (!items.length) {
+            rows.innerHTML = `
+              <tr>
+                <td>—</td>
+                <td>No live assembly data available for this project.</td>
+                <td>0</td>
+                <td>0 kg</td>
+                <td>Fitup</td>
+                <td>—</td>
+                <td>—</td>
+              </tr>
+            `;
+            return;
+          }
+
+          rows.innerHTML = items.map((item) => {
+            const qrCode = item.qrCode || 'assembly';
+            const stage = item.fabricationStage || 'Fitup';
+            const qty = Number(item.assemblyQuantity ?? 0);
+            const weight = Number(item.weight ?? item.assemblyWeightEach ?? 0);
+
+            return `
+              <tr>
+                <td><strong>${item.mainMark || '—'}</strong></td>
+                <td>${item.drawingNumber || item.mainMark || '—'}</td>
+                <td>${qty}</td>
+                <td>${formatWeight(weight)}</td>
+                <td>
+                  <select class="stage-select" data-qr="${qrCode}">
+                    ${fabricationStages.map((option) => `<option value="${option}" ${option === stage ? 'selected' : ''}>${option}</option>`).join('')}
+                  </select>
+                </td>
+                <td class="qr-cell">
+                  <img src="/api/assemblies/${encodeURIComponent(qrCode)}/qr" alt="QR code for ${item.mainMark || 'assembly'}" class="assembly-qr" />
+                </td>
+                <td>
+                  <button type="button" class="print-qr-btn" data-qr="${qrCode}" data-mainmark="${escapeHtml(item.mainMark || 'Assembly')}">Print QR</button>
+                </td>
+              </tr>
+            `;
+          }).join('');
+
+          rows.querySelectorAll('.stage-select').forEach((select) => {
+            select.addEventListener('change', async () => {
+              await updateAssemblyStage(select.dataset.qr, select);
+            });
+          });
+
+          rows.querySelectorAll('.print-qr-btn').forEach((button) => {
+            button.addEventListener('click', () => {
+              const qrCode = button.dataset.qr;
+              const mainMark = button.dataset.mainmark || 'Assembly';
+              printAssemblyQr(qrCode, mainMark);
+            });
+          });
+        };
+
+        renderRows(allAssemblyRows);
+
+        if (searchInput) {
+          searchInput.addEventListener('input', () => {
+            const q = (searchInput.value || '').trim().toLowerCase();
+            const filtered = allAssemblyRows.filter((item) => {
+              const text = `${item.mainMark || ''} ${item.drawingNumber || ''}`.toLowerCase();
+              return !q || text.includes(q);
+            });
+            renderRows(filtered);
+          });
+        }
+
+        const scanButton = document.getElementById('scan-assembly-btn');
+        if (scanButton) {
+          scanButton.addEventListener('click', () => {
+            const currentJob = new URLSearchParams(window.location.search).get('job') || '';
+            window.location.href = `/scan.html${currentJob ? `?job=${encodeURIComponent(currentJob)}` : ''}`;
+          });
+        }
+      } catch (error) {
+        console.error(error);
+        title.textContent = `${jobNumber} Assemblies`;
+        meta.textContent = 'Unable to load live assembly data from PowerFab.';
+      }
+    }
+
+    loadAssemblyData();
+  </script>
+</body>
+</html>

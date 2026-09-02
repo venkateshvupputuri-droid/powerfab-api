@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project Overview</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="detail-page">
+  <div class="page-shell project-shell">
+    <header class="topbar detail-topbar">
+      <div class="topbar-left">
+        <button class="menu-button" type="button" aria-label="Open menu">☰</button>
+        <div class="brand" aria-label="Tekla PowerFab Go">
+          <div class="brand-mark" aria-hidden="true">
+            <span class="brand-mark-inner"></span>
+          </div>
+          <div class="brand-text">
+            <span class="tekla">Tekla</span>
+            <span class="powerfab">PowerFab</span>
+            <span class="go">Go</span>
+          </div>
+        </div>
+      </div>
+      <button class="user-button" type="button" aria-label="User profile">◔</button>
+    </header>
+
+    <nav class="project-nav" aria-label="Project sections">
+      <button type="button" class="project-nav-item active">OVERVIEW</button>
+      <button type="button" class="project-nav-item">ASSEMBLIES</button>
+      <button type="button" class="project-nav-item">DRAWINGS</button>
+      <button type="button" class="project-nav-item">SEQUENCES</button>
+      <button type="button" class="project-nav-item">CATEGORIES</button>
+      <button type="button" class="project-nav-item">INSPECTIONS</button>
+      <button type="button" class="project-nav-item">INSPECTION TEST RECORDS</button>
+      <button type="button" class="project-nav-item">PREPARED CUT LISTS</button>
+      <button type="button" class="project-nav-item">MATERIAL STATUS</button>
+    </nav>
+
+    <main class="detail-content">
+      <h1 id="project-title" class="project-title">Loading project...</h1>
+
+      <div id="project-meta" class="project-meta" aria-live="polite"></div>
+
+      <div class="detail-grid">
+        <article class="detail-card">
+          <h2>Assemblies</h2>
+          <div id="assemblies-count" class="detail-card-value">0</div>
+          <button type="button" class="detail-button" data-target="assemblies">VIEW</button>
+        </article>
+
+        <article class="detail-card">
+          <h2>Drawings</h2>
+          <div class="detail-card-value">0/1441</div>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card">
+          <h2>Sequences</h2>
+          <div class="detail-card-value">7</div>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card">
+          <h2>Categories</h2>
+          <div class="detail-card-value">13</div>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card">
+          <h2>Inspection Test Records</h2>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card">
+          <h2>Transmittals</h2>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card">
+          <h2>Requests for Information (RFIs)</h2>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card">
+          <h2>Change Orders</h2>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card">
+          <h2>Prepared Cut Lists (0)</h2>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card">
+          <h2>Material Status</h2>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card">
+          <h2>Production Tracking</h2>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card">
+          <h2>Production Status</h2>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card shipping-card">
+          <h2>Shipping Status</h2>
+          <button type="button" class="detail-button">VIEW</button>
+        </article>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    async function loadProjectOverview() {
+      const params = new URLSearchParams(window.location.search);
+      const jobNumber = params.get('job');
+      const title = document.getElementById('project-title');
+      const meta = document.getElementById('project-meta');
+
+      if (!jobNumber) {
+        title.textContent = 'Project not selected';
+        meta.textContent = 'No project was specified.';
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/project-detail?job=${encodeURIComponent(jobNumber)}`);
+        const payload = await response.json();
+        const project = payload.project;
+
+        if (!project) {
+          title.textContent = jobNumber;
+          meta.textContent = 'Project data not found in the live PowerFab response.';
+          return;
+        }
+
+        const description = project.jobDescription || project.jobNumber || 'No description';
+        title.textContent = `${project.jobNumber || jobNumber}: ${description}`;
+
+        const details = [
+          project.jobLocation ? `Site: ${project.jobLocation}` : null,
+          project.plant ? `Plant: ${project.plant}` : null,
+          project.unit ? `Unit: ${project.unit}` : null,
+          project.status ? `Status: ${project.status}` : null,
+          project.updatedAt ? `Updated: ${new Date(project.updatedAt).toLocaleString()}` : null
+        ].filter(Boolean);
+
+        meta.innerHTML = details.map((item) => `<span>${item}</span>`).join('');
+
+        const countingMap = [
+          ['assemblies-count', project.assemblyCount],
+          ['drawings-count', project.drawingCount],
+          ['sequences-count', project.sequenceCount],
+          ['categories-count', project.categoryCount],
+          ['inspections-count', project.inspectionCount],
+          ['prepared-cut-lists-count', project.preparedCutListCount],
+          ['material-status-count', project.materialStatusCount],
+          ['production-tracking-count', project.productionTrackingCount],
+          ['shipping-status-count', project.shippingStatusCount]
+        ];
+
+        for (const [id, value] of countingMap) {
+          const el = document.getElementById(id);
+          if (el) {
+            el.textContent = value ?? 0;
+          }
+        }
+
+        document.querySelectorAll('[data-target="assemblies"]').forEach((button) => {
+          button.addEventListener('click', () => {
+            window.open(`/assembly.html?job=${encodeURIComponent(jobNumber)}`, '_blank', 'noopener,noreferrer');
+          });
+        });
+      } catch (error) {
+        console.error(error);
+        title.textContent = jobNumber;
+        meta.textContent = 'Unable to load live project data from PowerFab.';
+      }
+    }
+
+    loadProjectOverview();
+  </script>
+</body>
+</html>
