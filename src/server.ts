@@ -6,7 +6,7 @@ import QRCode from 'qrcode';
 import { z } from 'zod';
 import { createHash } from 'crypto';
 import { createPool } from 'mysql2/promise';
-import { existsSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { join, resolve } from 'path';
 
 const prisma = new PrismaClient();
@@ -15,6 +15,19 @@ const port = Number(process.env.PORT ?? 3000);
 const publicAppUrl = process.env.PUBLIC_APP_URL ?? `http://localhost:${port}`;
 const powerFabDrawingsUrlTemplate = process.env.POWERFAB_DRAWINGS_URL_TEMPLATE ?? 'https://adani.teklapowerfab.net/pdc-job-overview?ProductionControlID={productionControlId}#sectionDrawings';
 const drawingsRoot = process.env.POWERFAB_DRAWINGS_ROOT ?? '';
+
+function findDrawingPdf(root: string, fileName: string): string | null {
+  if (!existsSync(root)) return null;
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const entryPath = join(root, entry.name);
+    if (entry.isFile() && entry.name.toLowerCase() === fileName.toLowerCase()) return resolve(entryPath);
+    if (entry.isDirectory()) {
+      const match = findDrawingPdf(entryPath, fileName);
+      if (match) return match;
+    }
+  }
+  return null;
+}
 const projectTableCandidates = (process.env.POWERFAB_PROJECT_TABLES ?? 'projects,productioncontroljobs,externalprojects').split(',').map((value) => value.trim()).filter(Boolean);
 const projectJobColumn = process.env.POWERFAB_JOB_COLUMN ?? 'JobNumber';
 const projectDescriptionColumn = process.env.POWERFAB_DESCRIPTION_COLUMN ?? 'JobDescription';
@@ -722,12 +735,13 @@ app.get('/api/drawings/:drawingId/pdf', async (request, response) => {
 
   const drawingNumber = String(drawing.DrawingNumber ?? '').replace(/[^A-Za-z0-9_.-]/g, '');
   const relativeFolder = String(drawing.SubdirectoryPath ?? '').replace(/[\\/]+/g, '/').replace(/^\/+|\.\.+/g, '');
-  const candidates = [
-    resolve(join(drawingsRoot, relativeFolder, `${drawingNumber}.pdf`)),
-    resolve(join(drawingsRoot, `${drawingNumber}.pdf`))
-  ];
   const root = resolve(drawingsRoot);
-  const filePath = candidates.find((candidate) => candidate.startsWith(root) && existsSync(candidate));
+  const directCandidates = [
+    resolve(join(root, relativeFolder, `${drawingNumber}.pdf`)),
+    resolve(join(root, `${drawingNumber}.pdf`))
+  ];
+  const filePath = directCandidates.find((candidate) => candidate.startsWith(root) && existsSync(candidate))
+    ?? findDrawingPdf(root, `${drawingNumber}.pdf`);
   if (!filePath) return response.status(404).send(`PDF not found for drawing ${drawingNumber}`);
   response.sendFile(filePath);
 });
