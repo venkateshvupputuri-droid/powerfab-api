@@ -181,7 +181,7 @@
         document.getElementById('drawings-nav').addEventListener('click', openDrawings);
         document.getElementById('drawings-view').addEventListener('click', openDrawings);
         const openInspections = () => window.open(`/inspections.html?job=${encodeURIComponent(jobNumber)}`, '_blank', 'noopener,noreferrer');
-        const openTransmittals = () => window.open(`/transmittals.html?job=${encodeURIComponent(jobNumber)}`, '_blank', 'noopener,noreferrer');
+        const openTransmittals = () => { window.location.href = `/transmittals.html?job=${encodeURIComponent(jobNumber)}`; };
         document.getElementById('inspections-nav').addEventListener('click', openInspections);
         document.getElementById('inspections-view').addEventListener('click', openInspections);
         document.getElementById('transmittals-view').addEventListener('click', openTransmittals);
