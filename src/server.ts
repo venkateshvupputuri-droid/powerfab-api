@@ -637,6 +637,70 @@ app.get('/api/project-detail', async (request, response) => {
   }
 });
 
+app.get('/api/project-drawings', async (request, response) => {
+  const jobNumber = String(request.query.job || '').trim();
+  if (!jobNumber) return response.status(400).json({ error: 'job query parameter is required' });
+
+  try {
+    const [projectRows] = await mysqlConnection.query(
+      'SELECT ProjectID, JobNumber FROM `projects` WHERE `JobNumber` = ? LIMIT 1',
+      [jobNumber]
+    );
+    const project = (projectRows as Array<Record<string, any>>)[0];
+    if (!project) return response.status(404).json({ error: 'Project not found in live PowerFab database.' });
+
+    const [productionRows] = await mysqlConnection.query(
+      'SELECT ProductionControlID FROM `productioncontroljobs` WHERE `JobNumber` = ? LIMIT 1',
+      [jobNumber]
+    );
+    const productionControlId = Number((productionRows as Array<Record<string, any>>)[0]?.ProductionControlID ?? 0);
+    const [drawingRows] = await mysqlConnection.query(
+      `SELECT
+        d.DrawingID,
+        d.DrawingNumber,
+        d.Description,
+        d.ApprovalStatusID,
+        COALESCE(aps.Description, '—') AS approvalStatus,
+        COALESCE(dr.Revision, '—') AS revision,
+        COALESCE((SELECT SUM(pca.AssemblyQuantity)
+          FROM productioncontrolitems pci
+          JOIN productioncontrolassemblies pca ON pca.ProductionControlAssemblyID = pci.ProductionControlAssemblyID
+          WHERE pci.DrawingID = d.DrawingID AND pci.ProductionControlID = ?), 0) AS assemblyQuantity,
+        COALESCE((SELECT SUM(pci.Weight * pci.Quantity)
+          FROM productioncontrolitems pci
+          WHERE pci.DrawingID = d.DrawingID AND pci.ProductionControlID = ?), 0) AS weight,
+        COALESCE((SELECT MIN(pcs.SequenceID)
+          FROM productioncontrolitems pci
+          JOIN productioncontrolsequences pcs ON pcs.ProductionControlID = pci.ProductionControlID
+          WHERE pci.DrawingID = d.DrawingID AND pci.ProductionControlID = ?), '—') AS sequence
+      FROM drawings d
+      LEFT JOIN drawingrevisions dr ON dr.DrawingRevisionID = d.LatestDrawingRevisionID
+      LEFT JOIN approvalstatuses aps ON aps.ApprovalStatusID = d.ApprovalStatusID
+      WHERE d.ProjectID = ?
+      ORDER BY d.DrawingNumber
+      LIMIT 2000`,
+      [productionControlId, productionControlId, productionControlId, Number(project.ProjectID)]
+    );
+
+    response.json({
+      jobNumber: project.JobNumber,
+      drawings: (drawingRows as Array<Record<string, any>>).map((drawing) => ({
+        drawingNumber: cleanPowerFabValue(drawing.DrawingNumber),
+        drawingLog: 'Drawing',
+        revision: cleanPowerFabValue(drawing.revision),
+        description: cleanPowerFabValue(drawing.Description),
+        approvalStatus: cleanPowerFabValue(drawing.approvalStatus),
+        assemblyQuantity: Number(drawing.assemblyQuantity ?? 0),
+        weight: Number(drawing.weight ?? 0),
+        sequence: drawing.sequence ?? '—'
+      }))
+    });
+  } catch (error) {
+    console.error('Unable to load project drawings', error);
+    response.status(500).json({ error: 'Failed to load project drawings from PowerFab.' });
+  }
+});
+
 app.get('/api/assemblies/:qrCode/qr', async (request, response) => {
   const qrCode = String(request.params.qrCode || '').trim();
   if (!qrCode) return response.status(400).send('QR code is required');

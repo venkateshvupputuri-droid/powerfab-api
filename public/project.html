@@ -177,7 +177,7 @@
           });
         });
 
-        const openDrawings = () => window.open(project.drawingsUrl, '_blank', 'noopener,noreferrer');
+        const openDrawings = () => window.open(`/drawings.html?job=${encodeURIComponent(jobNumber)}`, '_blank', 'noopener,noreferrer');
         document.getElementById('drawings-nav').addEventListener('click', openDrawings);
         document.getElementById('drawings-view').addEventListener('click', openDrawings);
       } catch (error) {

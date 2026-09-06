@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Drawings</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="detail-page">
+  <div class="page-shell project-shell">
+    <header class="topbar detail-topbar">
+      <div class="topbar-left">
+        <button class="menu-button" type="button" aria-label="Open menu">☰</button>
+        <div class="brand" aria-label="Tekla PowerFab Go">
+          <div class="brand-mark" aria-hidden="true"><span class="brand-mark-inner"></span></div>
+          <div class="brand-text"><span class="tekla">Tekla</span><span class="powerfab">PowerFab</span><span class="go">Go</span></div>
+        </div>
+      </div>
+      <button class="user-button" type="button" aria-label="User profile">◔</button>
+    </header>
+
+    <nav class="project-nav" aria-label="Project sections">
+      <button type="button" class="project-nav-item" id="overview-nav">OVERVIEW</button>
+      <button type="button" class="project-nav-item" id="assemblies-nav">ASSEMBLIES</button>
+      <button type="button" class="project-nav-item active">DRAWINGS</button>
+    </nav>
+
+    <main class="detail-content drawings-content">
+      <h1 id="drawings-title" class="project-title">Loading drawings...</h1>
+      <div class="drawings-toolbar">
+        <strong>All drawings</strong>
+        <input id="drawing-search" type="search" placeholder="Drawing #" aria-label="Search drawings">
+      </div>
+      <div class="drawings-table-wrap">
+        <table class="drawings-table">
+          <thead><tr><th>PDF</th><th>Dwg #</th><th>Dwg log</th><th>Rev. #</th><th>Description</th><th>Appr. status</th><th>Assy qty</th><th>Weight</th><th>Sequence</th></tr></thead>
+          <tbody id="drawing-rows"><tr><td colspan="9">Loading drawings...</td></tr></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const jobNumber = params.get('job') || '';
+    const title = document.getElementById('drawings-title');
+    const rows = document.getElementById('drawing-rows');
+    const search = document.getElementById('drawing-search');
+    let drawings = [];
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function render() {
+      const query = search.value.trim().toLowerCase();
+      const filtered = drawings.filter((drawing) => `${drawing.drawingNumber} ${drawing.description}`.toLowerCase().includes(query));
+      rows.innerHTML = filtered.length ? filtered.map((drawing) => `
+        <tr>
+          <td><span class="drawing-pdf">PDF</span></td>
+          <td><strong>${escapeHtml(drawing.drawingNumber)}</strong></td>
+          <td>${escapeHtml(drawing.drawingLog)}</td>
+          <td>${escapeHtml(drawing.revision)}</td>
+          <td>${escapeHtml(drawing.description)}</td>
+          <td>${escapeHtml(drawing.approvalStatus)}</td>
+          <td>${drawing.assemblyQuantity}</td>
+          <td>${Number(drawing.weight || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} kg</td>
+          <td>${escapeHtml(drawing.sequence)}</td>
+        </tr>`).join('') : '<tr><td colspan="9">No drawings found.</td></tr>';
+    }
+
+    document.getElementById('overview-nav').addEventListener('click', () => { window.location.href = `/project.html?job=${encodeURIComponent(jobNumber)}`; });
+    document.getElementById('assemblies-nav').addEventListener('click', () => { window.location.href = `/assembly.html?job=${encodeURIComponent(jobNumber)}`; });
+    search.addEventListener('input', render);
+
+    if (!jobNumber) {
+      title.textContent = 'Drawings';
+      rows.innerHTML = '<tr><td colspan="9">No project selected.</td></tr>';
+    } else {
+      fetch(`/api/project-drawings?job=${encodeURIComponent(jobNumber)}`)
+        .then(async (response) => { const payload = await response.json(); if (!response.ok) throw new Error(payload.error || 'Unable to load drawings'); return payload; })
+        .then((payload) => { drawings = payload.drawings || []; title.textContent = `${payload.jobNumber} Drawings (${drawings.length})`; render(); })
+        .catch((error) => { title.textContent = `${jobNumber} Drawings`; rows.innerHTML = `<tr><td colspan="9">${escapeHtml(error.message)}</td></tr>`; });
+    }
+  </script>
+</body>
+</html>

@@ -195,7 +195,7 @@
 
         title.textContent = `${project.jobNumber || jobNumber} Assemblies`;
         document.getElementById('drawings-nav').addEventListener('click', () => {
-          window.open(project.drawingsUrl, '_blank', 'noopener,noreferrer');
+          window.open(`/drawings.html?job=${encodeURIComponent(jobNumber)}`, '_blank', 'noopener,noreferrer');
         });
         meta.innerHTML = [
           project.plant ? `Plant: ${project.plant}` : null,
