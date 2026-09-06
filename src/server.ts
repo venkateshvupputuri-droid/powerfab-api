@@ -201,6 +201,8 @@ async function syncAssemblyStationToPowerFabTables(options: {
   assemblyLengthEach?: number;
   assemblySquareMetersEach?: number;
   assemblySurfaceAreaEach?: number;
+  hours?: number;
+  batchId?: string;
 }) {
   const record = await findAssemblyRecordByQrCode(options.qrCode);
   const finalJobNumber = String(options.jobNumber || record?.jobNumber || '').trim();
@@ -218,30 +220,36 @@ async function syncAssemblyStationToPowerFabTables(options: {
   const routeName = String(options.routeName || '').trim() || 'Fabrication Route';
 
   try {
-    await mysqlConnection.query(
-      `INSERT INTO \`productioncontrolitemstations\` (
-        ProductionControlID,
-        MainMark,
-        PieceMark,
-        SequenceID,
-        StationID,
-        Quantity,
-        WorkAreaID,
-        UserID,
-        DateCompleted,
-        TimeCompleted,
-        Hours,
-        BatchID
-      ) VALUES (?, ?, ?, 0, ?, ?, NULL, 0, CURDATE(), CURTIME(), 0, ?)`,
-      [
-        finalProductionControlId,
-        finalAssemblyMark,
-        finalAssemblyMark,
-        stationId || 0,
-        Math.max(assemblyQty, 1),
-        `${finalJobNumber}-${finalAssemblyMark}`
-      ]
+    const [itemRows] = await mysqlConnection.query(
+      `SELECT REPLACE(MainMark, CHAR(1), '') AS mainMark,
+              REPLACE(PieceMark, CHAR(1), '') AS pieceMark,
+              Quantity
+       FROM productioncontrolitems
+       WHERE ProductionControlID = ? AND ProductionControlAssemblyID = ?
+       ORDER BY ProductionControlItemID`,
+      [finalProductionControlId, Number(options.productionControlAssemblyID ?? record?.productionControlAssemblyID ?? 0)]
     );
+    const trackingItems = (itemRows as Array<Record<string, any>>).length > 0
+      ? itemRows as Array<Record<string, any>>
+      : [{ mainMark: finalAssemblyMark, pieceMark: finalAssemblyMark, Quantity: Math.max(assemblyQty, 1) }];
+
+    for (const item of trackingItems) {
+      await mysqlConnection.query(
+        `INSERT INTO \`productioncontrolitemstations\` (
+          ProductionControlID, MainMark, PieceMark, SequenceID, StationID, Quantity,
+          WorkAreaID, UserID, DateCompleted, TimeCompleted, Hours, BatchID
+        ) VALUES (?, ?, ?, 0, ?, ?, NULL, 0, CURDATE(), CURTIME(), ?, ?)`,
+        [
+          finalProductionControlId,
+          String(item.mainMark || finalAssemblyMark).trim(),
+          String(item.pieceMark || finalAssemblyMark).trim() || finalAssemblyMark,
+          stationId || 0,
+          Math.max(Number(item.Quantity ?? 0), 1),
+          Number(options.hours ?? 0),
+          options.batchId || `${finalJobNumber}-${finalAssemblyMark}`
+        ]
+      );
+    }
 
     const previousStationId = stationId > 0 ? Math.max(stationId - 1, 0) : null;
     const nextStationId = stationId > 0 ? stationId + 1 : null;
@@ -917,7 +925,9 @@ app.post('/api/assemblies/:qrCode/status', async (request, response) => {
     grossAssemblyWeightEach: assemblyMatch?.grossAssemblyWeightEach,
     assemblyLengthEach: assemblyMatch?.assemblyLengthEach,
     assemblySquareMetersEach: assemblyMatch?.assemblySquareMetersEach,
-    assemblySurfaceAreaEach: assemblyMatch?.assemblySurfaceAreaEach
+    assemblySurfaceAreaEach: assemblyMatch?.assemblySurfaceAreaEach,
+    hours: Number(stationData.hours ?? 0),
+    batchId: stationData.batchId ?? undefined
   });
 
   const history = await mysqlConnection.query(
