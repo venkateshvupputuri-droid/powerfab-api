@@ -172,7 +172,7 @@ async function ensureAssemblyScanTables() {
   const bootstrapName = String(process.env.CONTRACTOR_BOOTSTRAP_NAME ?? '').trim();
   if (bootstrapUsername && bootstrapPassword && bootstrapName) {
     await mysqlConnection.query(
-      'INSERT IGNORE INTO contractor_users (username, passwordHash, contractorName) VALUES (?, ?, ?)',
+      'INSERT INTO contractor_users (username, passwordHash, contractorName, active) VALUES (?, ?, ?, TRUE) ON DUPLICATE KEY UPDATE passwordHash = VALUES(passwordHash), contractorName = VALUES(contractorName), active = TRUE',
       [bootstrapUsername, hashContractorPassword(bootstrapPassword), bootstrapName]
     );
     const [contractorRows] = await mysqlConnection.query('SELECT id FROM contractor_users WHERE username = ? LIMIT 1', [bootstrapUsername]);
