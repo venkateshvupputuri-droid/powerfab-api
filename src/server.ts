@@ -861,6 +861,68 @@ app.get('/api/project-drawings', async (request, response) => {
   }
 });
 
+async function getAuthorizedProject(request: express.Request, response: express.Response) {
+  const contractorId = getContractorId(request);
+  const jobNumber = String(request.query.job || '').trim();
+  if (!contractorId) {
+    response.status(401).json({ error: 'Contractor login required.' });
+    return null;
+  }
+  if (!jobNumber || !(await contractorCanAccessJob(contractorId, jobNumber))) {
+    response.status(403).json({ error: 'Project is not assigned to this contractor.' });
+    return null;
+  }
+  const [rows] = await mysqlConnection.query('SELECT ProjectID, JobNumber, JobDescription FROM projects WHERE JobNumber = ? LIMIT 1', [jobNumber]);
+  const project = (rows as Array<Record<string, any>>)[0];
+  if (!project) {
+    response.status(404).json({ error: 'Project not found.' });
+    return null;
+  }
+  return { contractorId, jobNumber, project };
+}
+
+app.get('/api/project-transmittals', async (request, response) => {
+  const context = await getAuthorizedProject(request, response);
+  if (!context) return;
+  const [rows] = await mysqlConnection.query(
+    `SELECT t.TransmittalID, t.TransmittalNumber, t.TransmittalDate, t.Title, t.Sending,
+            t.Attn, t.SentBy, t.CopyTo, t.Remarks, t.NumberOfDrawings,
+            t.NumberOfOutstandingDrawings, t.LastDateReceived, t.ReturnDate,
+            COALESCE(f.Name, '—') AS firmName
+     FROM transmittals t
+     LEFT JOIN firms f ON f.FirmID = t.FirmID
+     WHERE t.ProjectID = ?
+     ORDER BY t.TransmittalDate DESC, t.TransmittalID DESC`,
+    [Number(context.project.ProjectID)]
+  );
+  response.json({ jobNumber: context.jobNumber, transmittals: rows });
+});
+
+app.get('/api/project-inspections', async (request, response) => {
+  const context = await getAuthorizedProject(request, response);
+  if (!context) return;
+  const [powerFabRows] = await mysqlConnection.query(
+    `SELECT itr.InspectionTestRecordID, itr.TestDateTime, itr.TestUpdatedDateTime,
+            itr.TestFailed, itr.Quantity, it.InspectionTestID,
+            COALESCE(itt.Description, 'Inspection') AS inspectionType,
+            pis.MainMark, pis.PieceMark
+     FROM inspectiontestrecords itr
+     LEFT JOIN inspectiontests it ON it.InspectionTestID = itr.InspectionTestID
+     LEFT JOIN inspectiontesttypes itt ON itt.InspectionTestTypeID = it.InspectionTestTypeID
+     LEFT JOIN productioncontrolitemstations pis ON pis.ProductionControlItemStationID = itr.ProductionControlItemStationID
+     WHERE pis.ProductionControlID = ?
+     ORDER BY itr.TestDateTime DESC
+     LIMIT 1000`,
+    [await getSingleValue('SELECT ProductionControlID FROM productioncontroljobs WHERE JobNumber = ? LIMIT 1', [context.jobNumber])]
+  );
+  const [portalRows] = await mysqlConnection.query(
+    `SELECT id, qrCode, assemblyMark, result, inspector, remarks, createdAt
+     FROM contractor_fitup_inspections WHERE jobNumber = ? ORDER BY createdAt DESC LIMIT 1000`,
+    [context.jobNumber]
+  );
+  response.json({ jobNumber: context.jobNumber, powerFabInspections: powerFabRows, contractorInspections: portalRows });
+});
+
 app.get('/api/drawings/:drawingId/pdf', async (request, response) => {
   const drawingId = Number(request.params.drawingId);
   if (!Number.isInteger(drawingId) || drawingId <= 0) return response.status(400).send('Invalid drawing ID');

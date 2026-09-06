@@ -31,7 +31,7 @@
       <button type="button" id="drawings-nav" class="project-nav-item">DRAWINGS</button>
       <button type="button" class="project-nav-item">SEQUENCES</button>
       <button type="button" class="project-nav-item">CATEGORIES</button>
-      <button type="button" class="project-nav-item">INSPECTIONS</button>
+      <button type="button" id="inspections-nav" class="project-nav-item">INSPECTIONS</button>
       <button type="button" class="project-nav-item">INSPECTION TEST RECORDS</button>
       <button type="button" class="project-nav-item">PREPARED CUT LISTS</button>
       <button type="button" class="project-nav-item">MATERIAL STATUS</button>
@@ -196,6 +196,9 @@
         title.textContent = `${project.jobNumber || jobNumber} Assemblies`;
         document.getElementById('drawings-nav').addEventListener('click', () => {
           window.open(`/drawings.html?job=${encodeURIComponent(jobNumber)}`, '_blank', 'noopener,noreferrer');
+        });
+        document.getElementById('inspections-nav').addEventListener('click', () => {
+          window.open(`/inspections.html?job=${encodeURIComponent(jobNumber)}`, '_blank', 'noopener,noreferrer');
         });
         meta.innerHTML = [
           project.plant ? `Plant: ${project.plant}` : null,
