@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transmittal Drawings</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="detail-page">
+  <div class="page-shell project-shell">
+    <nav class="project-nav">
+      <button type="button" class="project-nav-item" id="back-nav">TRANSMITTALS</button>
+    </nav>
+    <main class="detail-content drawings-content assigned-drawings-content">
+      <h1 id="page-title" class="project-title">Loading assigned drawings...</h1>
+      <div class="drawings-toolbar assigned-drawings-toolbar">
+        <strong>Assigned drawings</strong>
+        <div class="drawing-actions">
+          <button type="button" class="detail-button compact-button" id="select-all">Select all</button>
+          <button type="button" class="detail-button compact-button" id="print-all">Print all QR codes</button>
+          <button type="button" class="detail-button compact-button" id="print-selected">Print selected</button>
+        </div>
+      </div>
+      <div class="drawings-table-wrap">
+        <table class="drawings-table assigned-drawings-table">
+          <thead><tr><th>Select</th><th>QR code</th><th>Drawing #</th><th>Revision</th><th>Description</th><th>Approval status</th><th>PDF</th></tr></thead>
+          <tbody id="drawing-rows"><tr><td colspan="7">Loading drawings...</td></tr></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const jobNumber = params.get('job') || '';
+    const transmittalId = params.get('transmittal') || '';
+    const title = document.getElementById('page-title');
+    const rows = document.getElementById('drawing-rows');
+    let drawings = [];
+
+    const escapeHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+    function render() {
+      rows.innerHTML = drawings.length ? drawings.map((drawing) => `
+        <tr data-drawing-id="${drawing.drawingId}">
+          <td><input class="drawing-check" type="checkbox" aria-label="Select ${escapeHtml(drawing.drawingNumber)}"></td>
+          <td><img class="drawing-qr" src="${drawing.qrUrl}" alt="QR code for ${escapeHtml(drawing.drawingNumber)}"></td>
+          <td><strong>${escapeHtml(drawing.drawingNumber)}</strong></td>
+          <td>${escapeHtml(drawing.revision)}</td>
+          <td>${escapeHtml(drawing.description)}</td>
+          <td>${escapeHtml(drawing.approvalStatus)}</td>
+          <td><a class="drawing-pdf" href="/api/drawings/${drawing.drawingId}/pdf" target="_blank" rel="noopener">PDF</a></td>
+        </tr>`).join('') : '<tr><td colspan="7">No drawings are assigned to this transmittal.</td></tr>';
+    }
+
+    function selectedDrawings() {
+      const selectedIds = new Set([...document.querySelectorAll('.drawing-check:checked')].map((input) => Number(input.closest('tr').dataset.drawingId)));
+      return drawings.filter((drawing) => selectedIds.has(drawing.drawingId));
+    }
+
+    function printDrawings(items) {
+      if (!items.length) { window.alert('Select at least one drawing to print.'); return; }
+      const printWindow = window.open('', '_blank', 'noopener,noreferrer');
+      if (!printWindow) return;
+      printWindow.document.write(`<!doctype html><html><head><title>Drawing QR codes</title><style>body{font-family:Arial,sans-serif;margin:24px;color:#172b3a}.sheet{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}.label{border:1px solid #bbb;padding:16px;text-align:center;break-inside:avoid}.label img{width:220px;height:220px}.number{font-size:18px;font-weight:700;margin-top:8px}.description{font-size:12px;margin-top:5px}@media print{button{display:none}}</style></head><body><div class="sheet">${items.map((drawing) => `<section class="label"><img src="${drawing.qrUrl}" alt="QR code"><div class="number">${escapeHtml(drawing.drawingNumber)}</div><div class="description">${escapeHtml(drawing.description)}</div></section>`).join('')}</div><script>window.onload=()=>window.print();<\/script></body></html>`);
+      printWindow.document.close();
+    }
+
+    document.getElementById('back-nav').onclick = () => { window.location.href = `/transmittals.html?job=${encodeURIComponent(jobNumber)}`; };
+    document.getElementById('select-all').onclick = () => { const checks = [...document.querySelectorAll('.drawing-check')]; const shouldSelect = checks.some((check) => !check.checked); checks.forEach((check) => { check.checked = shouldSelect; }); };
+    document.getElementById('print-all').onclick = () => printDrawings(drawings);
+    document.getElementById('print-selected').onclick = () => printDrawings(selectedDrawings());
+
+    if (!jobNumber || !transmittalId) {
+      title.textContent = 'Assigned drawings';
+      rows.innerHTML = '<tr><td colspan="7">A project and transmittal are required.</td></tr>';
+    } else {
+      fetch(`/api/transmittal-drawings?job=${encodeURIComponent(jobNumber)}&transmittal=${encodeURIComponent(transmittalId)}`)
+        .then(async (response) => { const payload = await response.json(); if (!response.ok) throw new Error(payload.error || 'Unable to load assigned drawings'); return payload; })
+        .then((payload) => { drawings = payload.drawings || []; title.textContent = `${payload.jobNumber} Assigned Drawings (${drawings.length})`; render(); })
+        .catch((error) => { title.textContent = `${jobNumber} Assigned Drawings`; rows.innerHTML = `<tr><td colspan="7">${escapeHtml(error.message)}</td></tr>`; });
+    }
+  </script>
+</body>
+</html>

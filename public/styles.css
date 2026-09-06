@@ -976,6 +976,62 @@ body.detail-page {
     background: #fff;
     border-bottom: 3px solid #0d6ea7;
   }
+  .transmittal-link {
+    color: #075f99;
+    text-decoration: none;
+  }
+
+  .transmittal-link:hover {
+    text-decoration: underline;
+  }
+
+  .assigned-drawings-toolbar {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .drawing-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .compact-button {
+    margin: 0;
+    padding: 9px 12px;
+    width: auto;
+  }
+
+  .assigned-drawings-table th:first-child,
+  .assigned-drawings-table td:first-child {
+    text-align: center;
+    width: 70px;
+  }
+
+  .assigned-drawings-table input[type="checkbox"] {
+    height: 18px;
+    width: 18px;
+  }
+
+  .drawing-qr {
+    display: block;
+    height: 84px;
+    width: 84px;
+  }
+
+  @media (max-width: 720px) {
+    .assigned-drawings-toolbar {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .drawing-actions {
+      justify-content: flex-start;
+    }
+  }
 
   .drawings-table {
     width: 100%;

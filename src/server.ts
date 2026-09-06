@@ -898,6 +898,46 @@ app.get('/api/project-transmittals', async (request, response) => {
   response.json({ jobNumber: context.jobNumber, transmittals: rows });
 });
 
+app.get('/api/transmittal-drawings', async (request, response) => {
+  const context = await getAuthorizedProject(request, response);
+  if (!context) return;
+  const transmittalId = Number(request.query.transmittal || 0);
+  if (!Number.isInteger(transmittalId) || transmittalId <= 0) return response.status(400).json({ error: 'transmittal query parameter is required' });
+
+  try {
+    const [drawingRows] = await mysqlConnection.query(
+      `SELECT DISTINCT d.DrawingID, d.DrawingNumber, d.Description,
+              COALESCE(dr.Revision, '—') AS revision,
+              COALESCE(aps.Description, '—') AS approvalStatus
+       FROM drawingtransmittals dt
+       JOIN transmittals t ON t.TransmittalID = dt.TransmittalID
+       JOIN drawings d ON d.DrawingID = dt.DrawingID
+       LEFT JOIN drawingrevisions dr ON dr.DrawingRevisionID = COALESCE(dt.DrawingRevisionID, d.LatestDrawingRevisionID)
+       LEFT JOIN approvalstatuses aps ON aps.ApprovalStatusID = d.ApprovalStatusID
+       WHERE dt.TransmittalID = ? AND t.ProjectID = ?
+       ORDER BY d.DrawingNumber
+       LIMIT 2000`,
+      [transmittalId, Number(context.project.ProjectID)]
+    );
+
+    response.json({
+      jobNumber: context.jobNumber,
+      transmittalId,
+      drawings: (drawingRows as Array<Record<string, any>>).map((drawing) => ({
+        drawingId: Number(drawing.DrawingID),
+        drawingNumber: cleanPowerFabValue(drawing.DrawingNumber),
+        description: cleanPowerFabValue(drawing.Description),
+        revision: cleanPowerFabValue(drawing.revision),
+        approvalStatus: cleanPowerFabValue(drawing.approvalStatus),
+        qrUrl: `/api/drawings/${Number(drawing.DrawingID)}/qr?job=${encodeURIComponent(context.jobNumber)}`
+      }))
+    });
+  } catch (error) {
+    console.error('Unable to load transmittal drawings', error);
+    response.status(500).json({ error: 'Failed to load drawings assigned to this transmittal.' });
+  }
+});
+
 app.get('/api/project-inspections', async (request, response) => {
   const context = await getAuthorizedProject(request, response);
   if (!context) return;
@@ -949,6 +989,24 @@ app.get('/api/drawings/:drawingId/pdf', async (request, response) => {
     ?? findDrawingPdf(root, `${drawingNumber}.pdf`);
   if (!filePath) return response.status(404).send(`PDF not found for drawing ${drawingNumber}`);
   response.sendFile(filePath);
+});
+
+app.get('/api/drawings/:drawingId/qr', async (request, response) => {
+  const drawingId = Number(request.params.drawingId);
+  const jobNumber = String(request.query.job || '').trim();
+  if (!Number.isInteger(drawingId) || drawingId <= 0 || !jobNumber) return response.status(400).send('Drawing ID and job are required');
+
+  try {
+    const [rows] = await mysqlConnection.query('SELECT DrawingNumber FROM drawings WHERE DrawingID = ? LIMIT 1', [drawingId]);
+    const drawing = (rows as Array<Record<string, any>>)[0];
+    if (!drawing) return response.status(404).send('Drawing not found');
+    const scanUrl = `${publicAppUrl}/drawings.html?job=${encodeURIComponent(jobNumber)}&drawing=${encodeURIComponent(String(drawingId))}`;
+    const png = await QRCode.toBuffer(scanUrl, { type: 'png', width: 600, margin: 2, errorCorrectionLevel: 'H' });
+    response.type('png').send(png);
+  } catch (error) {
+    console.error('Unable to render drawing QR code', error);
+    response.status(500).send('Unable to render drawing QR code');
+  }
 });
 
 app.get('/api/assemblies/:qrCode/qr', async (request, response) => {
