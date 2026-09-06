@@ -11,6 +11,7 @@ const prisma = new PrismaClient();
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
 const publicAppUrl = process.env.PUBLIC_APP_URL ?? `http://localhost:${port}`;
+const powerFabDrawingsUrlTemplate = process.env.POWERFAB_DRAWINGS_URL_TEMPLATE ?? 'https://adani.teklapowerfab.net/pdc-job-overview?ProductionControlID={productionControlId}#sectionDrawings';
 const projectTableCandidates = (process.env.POWERFAB_PROJECT_TABLES ?? 'projects,productioncontroljobs,externalprojects').split(',').map((value) => value.trim()).filter(Boolean);
 const projectJobColumn = process.env.POWERFAB_JOB_COLUMN ?? 'JobNumber';
 const projectDescriptionColumn = process.env.POWERFAB_DESCRIPTION_COLUMN ?? 'JobDescription';
@@ -487,6 +488,10 @@ function cleanPowerFabValue(value: unknown) {
   return String(value ?? '').replace(/\u0001/g, '').trim() || '—';
 }
 
+function buildPowerFabDrawingsUrl(productionControlId: number) {
+  return powerFabDrawingsUrlTemplate.replace('{productionControlId}', encodeURIComponent(String(productionControlId)));
+}
+
 app.get('/api/stations', async (_request, response) => {
   try {
     const stations = await getStationsFromDatabase();
@@ -621,6 +626,7 @@ app.get('/api/project-detail', async (request, response) => {
       shippingStatusCount: await getSingleValue('SELECT COUNT(*) AS total FROM `productioncontroljobs` WHERE `JobNumber` = ? ', [jobNumber]),
       assemblies: assemblyList,
       projectId,
+      drawingsUrl: buildPowerFabDrawingsUrl(productionControlId),
       updatedAt: project.JobDate ?? null
     };
 

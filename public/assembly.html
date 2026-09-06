@@ -28,7 +28,7 @@
     <nav class="project-nav" aria-label="Project sections">
       <button type="button" class="project-nav-item">OVERVIEW</button>
       <button type="button" class="project-nav-item active">ASSEMBLIES</button>
-      <button type="button" class="project-nav-item">DRAWINGS</button>
+      <button type="button" id="drawings-nav" class="project-nav-item">DRAWINGS</button>
       <button type="button" class="project-nav-item">SEQUENCES</button>
       <button type="button" class="project-nav-item">CATEGORIES</button>
       <button type="button" class="project-nav-item">INSPECTIONS</button>
@@ -194,6 +194,9 @@
         const project = payload.project;
 
         title.textContent = `${project.jobNumber || jobNumber} Assemblies`;
+        document.getElementById('drawings-nav').addEventListener('click', () => {
+          window.open(project.drawingsUrl, '_blank', 'noopener,noreferrer');
+        });
         meta.innerHTML = [
           project.plant ? `Plant: ${project.plant}` : null,
           project.unit ? `Unit: ${project.unit}` : null,

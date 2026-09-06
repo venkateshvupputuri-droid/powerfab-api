@@ -28,7 +28,7 @@
     <nav class="project-nav" aria-label="Project sections">
       <button type="button" class="project-nav-item active">OVERVIEW</button>
       <button type="button" class="project-nav-item">ASSEMBLIES</button>
-      <button type="button" class="project-nav-item">DRAWINGS</button>
+      <button type="button" id="drawings-nav" class="project-nav-item">DRAWINGS</button>
       <button type="button" class="project-nav-item">SEQUENCES</button>
       <button type="button" class="project-nav-item">CATEGORIES</button>
       <button type="button" class="project-nav-item">INSPECTIONS</button>
@@ -52,7 +52,7 @@
         <article class="detail-card">
           <h2>Drawings</h2>
           <div class="detail-card-value">0/1441</div>
-          <button type="button" class="detail-button">VIEW</button>
+          <button type="button" id="drawings-view" class="detail-button">VIEW</button>
         </article>
 
         <article class="detail-card">
@@ -176,6 +176,10 @@
             window.open(`/assembly.html?job=${encodeURIComponent(jobNumber)}`, '_blank', 'noopener,noreferrer');
           });
         });
+
+        const openDrawings = () => window.open(project.drawingsUrl, '_blank', 'noopener,noreferrer');
+        document.getElementById('drawings-nav').addEventListener('click', openDrawings);
+        document.getElementById('drawings-view').addEventListener('click', openDrawings);
       } catch (error) {
         console.error(error);
         title.textContent = jobNumber;
