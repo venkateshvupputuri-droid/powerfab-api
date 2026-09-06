@@ -27,11 +27,23 @@
 
     <main class="content-panel">
       <div class="landing-actions">
+        <form id="contractor-login" class="login-card">
+          <h1>Contractor Portal</h1>
+          <label>Username<input id="contractor-username" autocomplete="username" required></label>
+          <label>Password<input id="contractor-password" type="password" autocomplete="current-password" required></label>
+          <button class="primary-action" type="submit">Sign in</button>
+          <p id="login-error" class="login-error" role="alert"></p>
+        </form>
+
+        <div id="contractor-session" class="contractor-session hidden">
+          <strong id="contractor-name"></strong>
+          <button id="contractor-logout" class="secondary-action" type="button">Sign out</button>
+        </div>
         <button id="projects-open" class="primary-action" type="button">
           Projects
         </button>
 
-        <button id="connect-powerfab" class="secondary-action" type="button">
+        <button id="connect-powerfab" class="secondary-action hidden" type="button">
           Connect PowerFab
         </button>
       </div>

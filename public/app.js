@@ -7,11 +7,51 @@ document.addEventListener('DOMContentLoaded', () => {
   const connectButton = document.getElementById('connect-powerfab');
   const projectsOpen = document.getElementById('projects-open');
   const projectsPage = document.getElementById('projects-page');
+  const loginForm = document.getElementById('contractor-login');
+  const loginError = document.getElementById('login-error');
+  const sessionPanel = document.getElementById('contractor-session');
+  const contractorName = document.getElementById('contractor-name');
+  const logoutButton = document.getElementById('contractor-logout');
 
   const state = {
     allProjects: [],
-    currentSelection: null
+    currentSelection: null,
+    loggedIn: false
   };
+
+  function showSession(contractor) {
+    state.loggedIn = true;
+    loginForm.classList.add('hidden');
+    sessionPanel.classList.remove('hidden');
+    contractorName.textContent = contractor.contractorName || contractor.username;
+    connectButton.classList.remove('hidden');
+    projectsOpen.classList.remove('hidden');
+  }
+
+  loginForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    loginError.textContent = '';
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: document.getElementById('contractor-username').value, password: document.getElementById('contractor-password').value })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Unable to sign in');
+      showSession(payload.contractor);
+      connectButton.click();
+      const returnUrl = new URLSearchParams(window.location.search).get('return');
+      if (returnUrl) window.location.href = returnUrl;
+    } catch (error) {
+      loginError.textContent = error.message || 'Unable to sign in';
+    }
+  });
+
+  logoutButton.addEventListener('click', async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    window.location.reload();
+  });
 
   function syncSelectOptions(source, target) {
     const values = [...new Set(source.map((item) => item).filter(Boolean))].sort();
@@ -76,6 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   projectsOpen.addEventListener('click', () => {
+    if (!state.loggedIn) return;
     document.querySelector('.landing-actions').classList.add('hidden');
     projectsPage.classList.remove('hidden');
   });
@@ -107,5 +148,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  rowsContainer.innerHTML = '<div class="empty-state">Connect to PowerFab to load projects.</div>';
+  rowsContainer.innerHTML = '<div class="empty-state">Sign in to view assigned projects.</div>';
+  fetch('/api/auth/me').then(async (response) => {
+    if (!response.ok) return;
+    const payload = await response.json();
+    showSession(payload.contractor);
+    connectButton.click();
+  }).catch(() => undefined);
 });

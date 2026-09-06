@@ -14,6 +14,19 @@ npm run dev
 
 The API runs at `http://localhost:3000`.
 
+## Contractor portal
+
+Set these local `.env` values before starting the server to create the first contractor and assign projects:
+
+```env
+CONTRACTOR_BOOTSTRAP_USERNAME="contractor01"
+CONTRACTOR_BOOTSTRAP_PASSWORD="use-a-strong-password"
+CONTRACTOR_BOOTSTRAP_NAME="ABC Fabricators"
+CONTRACTOR_BOOTSTRAP_PROJECTS="601AD-LC-0766,OTHER-JOB-NUMBER"
+```
+
+The bootstrap account is created in MySQL on startup. Contractors sign in through `/`, see only assigned projects, and must remain assigned to a project to scan its QR code. Fit-up inspections are stored in `contractor_fitup_inspections`; station updates remain in `assembly_station_updates` and PowerFab piece tracking tables.
+
 ## Deploy to Render
 
 The repository includes `render.yaml`. In Render, choose **New > Blueprint**, connect the GitHub repository, and apply the blueprint. It creates a web service with a persistent 1 GB disk for SQLite. After deployment, use the generated service URL as the live API URL.

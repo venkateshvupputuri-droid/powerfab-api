@@ -4,7 +4,7 @@ import cors from 'cors';
 import { PrismaClient, FabricationStatus } from '@prisma/client';
 import QRCode from 'qrcode';
 import { z } from 'zod';
-import { createHash } from 'crypto';
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { createPool } from 'mysql2/promise';
 import { existsSync, readdirSync } from 'fs';
 import { join, resolve } from 'path';
@@ -15,6 +15,7 @@ const port = Number(process.env.PORT ?? 3000);
 const publicAppUrl = process.env.PUBLIC_APP_URL ?? `http://localhost:${port}`;
 const powerFabDrawingsUrlTemplate = process.env.POWERFAB_DRAWINGS_URL_TEMPLATE ?? 'https://adani.teklapowerfab.net/pdc-job-overview?ProductionControlID={productionControlId}#sectionDrawings';
 const drawingsRoot = process.env.POWERFAB_DRAWINGS_ROOT ?? '';
+const contractorSessions = new Map<string, { contractorId: number; expiresAt: number }>();
 
 function findDrawingPdf(root: string, fileName: string): string | null {
   if (!existsSync(root)) return null;
@@ -125,6 +126,62 @@ async function ensureAssemblyScanTables() {
       INDEX idx_station_update_created (qrCode, createdAt)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  await mysqlConnection.query(`
+    CREATE TABLE IF NOT EXISTS contractor_users (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      username VARCHAR(100) NOT NULL UNIQUE,
+      passwordHash VARCHAR(255) NOT NULL,
+      contractorName VARCHAR(255) NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await mysqlConnection.query(`
+    CREATE TABLE IF NOT EXISTS contractor_project_assignments (
+      contractorId BIGINT NOT NULL,
+      jobNumber VARCHAR(255) NOT NULL,
+      createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (contractorId, jobNumber),
+      INDEX idx_assignment_job (jobNumber)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await mysqlConnection.query(`
+    CREATE TABLE IF NOT EXISTS contractor_fitup_inspections (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      contractorId BIGINT NOT NULL,
+      qrCode VARCHAR(255) NOT NULL,
+      jobNumber VARCHAR(255) NOT NULL,
+      assemblyMark VARCHAR(255) NOT NULL,
+      result VARCHAR(30) NOT NULL,
+      inspector VARCHAR(255) NOT NULL,
+      remarks TEXT NULL,
+      checks JSON NULL,
+      createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      INDEX idx_fitup_qr (qrCode),
+      INDEX idx_fitup_contractor (contractorId)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  const bootstrapUsername = String(process.env.CONTRACTOR_BOOTSTRAP_USERNAME ?? '').trim();
+  const bootstrapPassword = String(process.env.CONTRACTOR_BOOTSTRAP_PASSWORD ?? '');
+  const bootstrapName = String(process.env.CONTRACTOR_BOOTSTRAP_NAME ?? '').trim();
+  if (bootstrapUsername && bootstrapPassword && bootstrapName) {
+    await mysqlConnection.query(
+      'INSERT IGNORE INTO contractor_users (username, passwordHash, contractorName) VALUES (?, ?, ?)',
+      [bootstrapUsername, hashContractorPassword(bootstrapPassword), bootstrapName]
+    );
+    const [contractorRows] = await mysqlConnection.query('SELECT id FROM contractor_users WHERE username = ? LIMIT 1', [bootstrapUsername]);
+    const contractorId = Number((contractorRows as Array<Record<string, any>>)[0]?.id ?? 0);
+    const projects = String(process.env.CONTRACTOR_BOOTSTRAP_PROJECTS ?? '').split(',').map((value) => value.trim()).filter(Boolean);
+    for (const jobNumber of projects) {
+      await mysqlConnection.query('INSERT IGNORE INTO contractor_project_assignments (contractorId, jobNumber) VALUES (?, ?)', [contractorId, jobNumber]);
+    }
+  }
 }
 
 function buildAssemblyQrCode(jobNumber: string, assemblyKey: string | number) {
@@ -413,6 +470,41 @@ app.get('/health', (_request, response) => response.json({ ok: true }));
 
 app.get('/api/statuses', (_request, response) => response.json({ statuses }));
 
+const contractorLoginInput = z.object({ username: z.string().trim().min(1), password: z.string().min(1) });
+const fitupInspectionInput = z.object({
+  result: z.enum(['PASS', 'FAIL', 'HOLD', 'RE-INSPECTION REQUIRED']),
+  inspector: z.string().trim().min(1).max(255),
+  remarks: z.string().trim().max(4000).optional(),
+  checks: z.record(z.string(), z.enum(['PASS', 'FAIL', 'N/A'])).optional()
+});
+
+app.post('/api/auth/login', async (request, response) => {
+  const input = contractorLoginInput.safeParse(request.body);
+  if (!input.success) return response.status(400).json({ error: 'Username and password are required.' });
+  const [rows] = await mysqlConnection.query('SELECT id, username, contractorName, passwordHash FROM contractor_users WHERE username = ? AND active = TRUE LIMIT 1', [input.data.username]);
+  const contractor = (rows as Array<Record<string, any>>)[0];
+  if (!contractor || !verifyContractorPassword(input.data.password, contractor.passwordHash)) return response.status(401).json({ error: 'Invalid contractor login.' });
+  const token = randomBytes(32).toString('hex');
+  contractorSessions.set(token, { contractorId: Number(contractor.id), expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+  response.setHeader('Set-Cookie', `powerfab_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800`);
+  response.json({ contractor: { username: contractor.username, contractorName: contractor.contractorName } });
+});
+
+app.post('/api/auth/logout', (request, response) => {
+  contractorSessions.delete(getSessionToken(request));
+  response.setHeader('Set-Cookie', 'powerfab_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+  response.json({ ok: true });
+});
+
+app.get('/api/auth/me', async (request, response) => {
+  const contractorId = getContractorId(request);
+  if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
+  const [rows] = await mysqlConnection.query('SELECT username, contractorName FROM contractor_users WHERE id = ? AND active = TRUE LIMIT 1', [contractorId]);
+  const contractor = (rows as Array<Record<string, any>>)[0];
+  if (!contractor) return response.status(401).json({ error: 'Contractor login required.' });
+  response.json({ contractor });
+});
+
 async function loadProjectsFromDatabase() {
   try {
     const rawCandidates = projectTableCandidates.map((tableName) => {
@@ -478,14 +570,13 @@ async function loadProjectsFromDatabase() {
   }
 }
 
-app.get('/api/projects', async (_request, response, next) => {
+app.get('/api/projects', async (request, response, next) => {
   try {
-    const projects = await loadProjectsFromDatabase();
-    if (!projects.length) {
-      return response.status(500).json({
-        error: 'PowerFab database is not reachable or no project tables were found. Set DATABASE_URL to the live MySQL connection and ensure the project/job tables exist.'
-      });
-    }
+    const contractorId = getContractorId(request);
+    if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
+    const [assignedRows] = await mysqlConnection.query('SELECT jobNumber FROM contractor_project_assignments WHERE contractorId = ?', [contractorId]);
+    const assignedJobs = new Set((assignedRows as Array<Record<string, any>>).map((row) => String(row.jobNumber)));
+    const projects = (await loadProjectsFromDatabase()).filter((project) => assignedJobs.has(String(project.jobNumber)));
     response.json({ projects });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown database error';
@@ -510,6 +601,44 @@ async function getSingleValue(query: string, values: unknown[] = []) {
 
 function cleanPowerFabValue(value: unknown) {
   return String(value ?? '').replace(/\u0001/g, '').trim() || '—';
+}
+
+function hashContractorPassword(password: string, salt = randomBytes(16).toString('hex')) {
+  return `${salt}:${scryptSync(password, salt, 32).toString('hex')}`;
+}
+
+function verifyContractorPassword(password: string, storedHash: string) {
+  const [salt, expected] = String(storedHash).split(':');
+  if (!salt || !expected) return false;
+  const actual = scryptSync(password, salt, 32);
+  const expectedBuffer = Buffer.from(expected, 'hex');
+  return actual.length === expectedBuffer.length && timingSafeEqual(actual, expectedBuffer);
+}
+
+function getSessionToken(request: express.Request) {
+  const cookie = String(request.headers.cookie ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith('powerfab_session='));
+  return cookie?.split('=')[1] ?? '';
+}
+
+function getContractorId(request: express.Request) {
+  const token = getSessionToken(request);
+  const session = contractorSessions.get(token);
+  if (!session || session.expiresAt < Date.now()) {
+    if (token) contractorSessions.delete(token);
+    return null;
+  }
+  return session.contractorId;
+}
+
+async function contractorCanAccessJob(contractorId: number, jobNumber: string) {
+  const [rows] = await mysqlConnection.query('SELECT 1 FROM contractor_project_assignments WHERE contractorId = ? AND jobNumber = ? LIMIT 1', [contractorId, jobNumber]);
+  return (rows as Array<Record<string, any>>).length > 0;
+}
+
+async function contractorCanAccessQr(contractorId: number, qrCode: string) {
+  const assembly = await findAssemblyRecordByQrCode(qrCode);
+  if (!assembly || !(await contractorCanAccessJob(contractorId, assembly.jobNumber))) return null;
+  return assembly;
 }
 
 function buildPowerFabDrawingsUrl(productionControlId: number) {
@@ -539,6 +668,9 @@ app.get('/api/assembly-routes', async (_request, response) => {
 app.get('/api/project-detail', async (request, response) => {
   const jobNumber = String(request.query.job || '').trim();
   if (!jobNumber) return response.status(400).json({ error: 'job query parameter is required' });
+  const contractorId = getContractorId(request);
+  if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
+  if (!(await contractorCanAccessJob(contractorId, jobNumber))) return response.status(403).json({ error: 'Project is not assigned to this contractor.' });
 
   try {
     const [projectRows] = await mysqlConnection.query('SELECT * FROM `projects` WHERE `JobNumber` = ? LIMIT 1', [jobNumber]);
@@ -664,6 +796,9 @@ app.get('/api/project-detail', async (request, response) => {
 app.get('/api/project-drawings', async (request, response) => {
   const jobNumber = String(request.query.job || '').trim();
   if (!jobNumber) return response.status(400).json({ error: 'job query parameter is required' });
+  const contractorId = getContractorId(request);
+  if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
+  if (!(await contractorCanAccessJob(contractorId, jobNumber))) return response.status(403).json({ error: 'Project is not assigned to this contractor.' });
 
   try {
     const [projectRows] = await mysqlConnection.query(
@@ -771,6 +906,11 @@ app.get('/api/assemblies/:qrCode/qr', async (request, response) => {
 app.get('/api/assemblies/:qrCode/status', async (request, response) => {
   const qrCode = String(request.params.qrCode || '').trim();
   if (!qrCode) return response.status(400).json({ error: 'QR code is required' });
+  const contractorId = getContractorId(request);
+  if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
+  if (!(await contractorCanAccessQr(contractorId, qrCode))) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
+  const [contractorRows] = await mysqlConnection.query('SELECT contractorName FROM contractor_users WHERE id = ? LIMIT 1', [contractorId]);
+  const assignedContractor = (contractorRows as Array<Record<string, any>>)[0]?.contractorName ?? '';
 
   const [rows] = await mysqlConnection.query(
     'SELECT * FROM `assembly_scan_history` WHERE `qrCode` = ? ORDER BY `createdAt` DESC',
@@ -801,6 +941,7 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
     currentStage,
     jobNumber: history[0]?.jobNumber || assemblyMatch?.jobNumber || '',
     assemblyMark: history[0]?.assemblyMark || assemblyMatch?.assemblyMark || '',
+    contractorName: assignedContractor,
     stationData: stationRow ? {
       mainMark: stationRow.mainMark,
       pieceMark: stationRow.pieceMark,
@@ -821,7 +962,42 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
       remark: stationRow.remark,
       includeIfPreviousStationNotCompleted: Boolean(stationRow.includeIfPreviousStationNotCompleted)
     } : null,
+    productionControlAssemblyID: assemblyMatch?.productionControlAssemblyID ?? null,
+    assemblyQuantity: assemblyMatch?.assemblyQuantity ?? 0,
+    assemblyWeightEach: assemblyMatch?.assemblyWeightEach ?? 0,
     history
+  });
+});
+
+app.get('/api/assemblies/:qrCode/boq', async (request, response) => {
+  const qrCode = String(request.params.qrCode || '').trim();
+  const contractorId = getContractorId(request);
+  if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
+  const assembly = await contractorCanAccessQr(contractorId, qrCode);
+  if (!assembly) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
+  const [rows] = await mysqlConnection.query(
+    `SELECT REPLACE(MainMark, CHAR(1), '') AS mainMark,
+            REPLACE(PieceMark, CHAR(1), '') AS pieceMark,
+            Quantity, Weight, Length, SurfaceArea, DimensionString
+     FROM productioncontrolitems
+     WHERE ProductionControlID = ? AND ProductionControlAssemblyID = ?
+     ORDER BY ProductionControlItemID`,
+    [assembly.productionControlID, assembly.productionControlAssemblyID]
+  );
+  response.json({
+    jobNumber: assembly.jobNumber,
+    assemblyMark: assembly.assemblyMark,
+    assemblyQuantity: assembly.assemblyQuantity,
+    assemblyWeightEach: assembly.assemblyWeightEach,
+    items: (rows as Array<Record<string, any>>).map((row) => ({
+      mainMark: cleanPowerFabValue(row.mainMark),
+      pieceMark: cleanPowerFabValue(row.pieceMark),
+      quantity: Number(row.Quantity ?? 0),
+      weight: Number(row.Weight ?? 0),
+      length: Number(row.Length ?? 0),
+      surfaceArea: Number(row.SurfaceArea ?? 0),
+      dimension: cleanPowerFabValue(row.DimensionString)
+    }))
   });
 });
 
@@ -831,6 +1007,10 @@ app.post('/api/assemblies/:qrCode/status', async (request, response) => {
   const stationInput = stationUpdateInput.safeParse(request.body?.stationData ?? request.body);
 
   if (!qrCode) return response.status(400).json({ error: 'QR code is required' });
+  const contractorId = getContractorId(request);
+  if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
+  const authorizedAssembly = await contractorCanAccessQr(contractorId, qrCode);
+  if (!authorizedAssembly) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
   if (!input.success) return response.status(400).json({ error: 'Invalid fabrication stage', allowedStages: fabricationStages });
   if (!stationInput.success) return response.status(400).json({ error: 'Invalid station data', details: stationInput.error.flatten() });
 
@@ -854,7 +1034,7 @@ app.post('/api/assemblies/:qrCode/status', async (request, response) => {
     });
   }
 
-  const assemblyMatch = await findAssemblyRecordByQrCode(qrCode);
+  const assemblyMatch = authorizedAssembly;
   const resolvedJobNumber = String(request.body?.jobNumber ?? assemblyMatch?.jobNumber ?? '').trim();
   const resolvedAssemblyMark = String(request.body?.assemblyMark ?? assemblyMatch?.assemblyMark ?? '').replace(/\u0001/g, '').trim();
   const resolvedStationName = station ? String(station.Description ?? '') : String(request.body?.stationName ?? '');
@@ -947,6 +1127,32 @@ app.post('/api/assemblies/:qrCode/status', async (request, response) => {
   assemblyStatusStore.set(qrCode, { currentStage: stage, history: historyRows.map((row) => ({ stage: row.stage, updatedAt: row.createdAt })) });
 
   response.json({ qrCode, currentStage: stage, history: historyRows, insertId: (stationInsert as any).insertId ?? null, saved: true });
+});
+
+app.post('/api/assemblies/:qrCode/fitup-inspections', async (request, response) => {
+  const qrCode = String(request.params.qrCode || '').trim();
+  const input = fitupInspectionInput.safeParse(request.body);
+  const contractorId = getContractorId(request);
+  if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
+  if (!input.success) return response.status(400).json({ error: 'Invalid fit-up inspection data.', details: input.error.flatten() });
+  const assembly = await contractorCanAccessQr(contractorId, qrCode);
+  if (!assembly) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
+
+  const [result] = await mysqlConnection.query(
+    `INSERT INTO contractor_fitup_inspections (contractorId, qrCode, jobNumber, assemblyMark, result, inspector, remarks, checks)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [contractorId, qrCode, assembly.jobNumber, assembly.assemblyMark, input.data.result, input.data.inspector, input.data.remarks ?? null, JSON.stringify(input.data.checks ?? {})]
+  );
+  response.status(201).json({ saved: true, inspectionId: (result as any).insertId, result: input.data.result });
+});
+
+app.get('/api/assemblies/:qrCode/fitup-inspections', async (request, response) => {
+  const qrCode = String(request.params.qrCode || '').trim();
+  const contractorId = getContractorId(request);
+  if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
+  if (!(await contractorCanAccessQr(contractorId, qrCode))) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
+  const [rows] = await mysqlConnection.query('SELECT id, result, inspector, remarks, checks, createdAt FROM contractor_fitup_inspections WHERE qrCode = ? ORDER BY createdAt DESC', [qrCode]);
+  response.json({ inspections: rows });
 });
 
 app.get('/api/instances', async (request, response, next) => {

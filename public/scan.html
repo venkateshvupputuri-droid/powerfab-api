@@ -54,6 +54,10 @@
             <span class="scan-status-label">Job</span>
             <strong id="scan-job-number">—</strong>
           </div>
+          <div class="scan-status-row">
+            <span class="scan-status-label">Contractor</span>
+            <strong id="scan-contractor-name">—</strong>
+          </div>
 
           <div class="station-form-grid">
             <label>Main Mark<input name="mainMark" value="A1"></label>
@@ -88,6 +92,19 @@
           </select>
 
           <button id="scan-update" type="button" class="detail-button scan-update-btn">Save Station Update</button>
+          <div class="scan-actions">
+            <button id="scan-drawing" type="button" class="secondary-button">Open Drawing</button>
+            <button id="scan-boq" type="button" class="secondary-button">View BOQ</button>
+          </div>
+          <div id="boq-panel" class="boq-panel hidden"></div>
+
+          <div class="fitup-panel">
+            <h2>Vendor Fit-up Inspection</h2>
+            <label>Inspector<input id="fitup-inspector" placeholder="Inspector name"></label>
+            <label>Result<select id="fitup-result"><option>PASS</option><option>FAIL</option><option>HOLD</option><option>RE-INSPECTION REQUIRED</option></select></label>
+            <label>Remarks<textarea id="fitup-remarks" rows="3"></textarea></label>
+            <button id="fitup-submit" type="button" class="detail-button">Submit Fit-up Inspection</button>
+          </div>
         </div>
       </div>
     </main>
@@ -103,9 +120,13 @@
     const assemblyMark = document.getElementById('scan-assembly-mark');
     const currentStage = document.getElementById('scan-current-stage');
     const jobField = document.getElementById('scan-job-number');
+    const contractorField = document.getElementById('scan-contractor-name');
     const stageSelect = document.getElementById('scan-stage-select');
     const submitButton = document.getElementById('scan-submit');
     const updateButton = document.getElementById('scan-update');
+    const drawingButton = document.getElementById('scan-drawing');
+    const boqButton = document.getElementById('scan-boq');
+    const boqPanel = document.getElementById('boq-panel');
     const cameraButton = document.getElementById('scan-camera-btn');
     const cameraPanel = document.getElementById('camera-panel');
     const cameraVideo = document.getElementById('camera-video');
@@ -115,6 +136,10 @@
     let activeQrCode = '';
     let cameraStream = null;
     let scanTimer = null;
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
 
     function getStationData() {
       return Object.fromEntries([...stationForm.querySelectorAll('input[name]')].map((input) => [
@@ -203,6 +228,10 @@
         const response = await fetch(`/api/assemblies/${encodeURIComponent(qrCode)}/status`);
         const payload = await response.json();
         if (!response.ok) {
+          if (response.status === 401) {
+            window.location.href = `/?return=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+            return;
+          }
           throw new Error(payload.error || 'Unable to find assembly QR code.');
         }
 
@@ -210,8 +239,17 @@
         assemblyMark.textContent = payload.assemblyMark || payload.qrCode || 'Unknown assembly';
         currentStage.textContent = payload.currentStage || 'Fitup';
         jobField.textContent = payload.jobNumber || jobNumber || 'N/A';
+        contractorField.textContent = payload.contractorName || 'Assigned contractor';
         resultBox.classList.remove('hidden');
         stageSelect.value = payload.currentStage || '';
+        drawingButton.onclick = () => window.open(`/drawings.html?job=${encodeURIComponent(payload.jobNumber || jobNumber)}`, '_blank', 'noopener,noreferrer');
+        boqButton.onclick = async () => {
+          const response = await fetch(`/api/assemblies/${encodeURIComponent(activeQrCode)}/boq`);
+          const boq = await response.json();
+          if (!response.ok) return alert(boq.error || 'Unable to load BOQ.');
+          boqPanel.innerHTML = `<h3>BOQ - ${escapeHtml(boq.assemblyMark)}</h3><div class="boq-table-wrap"><table class="boq-table"><thead><tr><th>Mark</th><th>Piece Mark</th><th>Qty</th><th>Length</th><th>Weight</th></tr></thead><tbody>${boq.items.map((item) => `<tr><td>${escapeHtml(item.mainMark)}</td><td>${escapeHtml(item.pieceMark)}</td><td>${item.quantity}</td><td>${item.length}</td><td>${item.weight}</td></tr>`).join('')}</tbody></table></div>`;
+          boqPanel.classList.remove('hidden');
+        };
         setStationData(payload.stationData || {
           mainMark: payload.assemblyMark || '',
           pieceMark: payload.assemblyMark || ''
@@ -261,6 +299,25 @@
       } catch (error) {
         console.error(error);
         alert(error.message || 'Unable to save station update.');
+      }
+    });
+
+    document.getElementById('fitup-submit').addEventListener('click', async () => {
+      if (!activeQrCode) return alert('Scan an assembly first.');
+      try {
+        const response = await fetch(`/api/assemblies/${encodeURIComponent(activeQrCode)}/fitup-inspections`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            inspector: document.getElementById('fitup-inspector').value,
+            result: document.getElementById('fitup-result').value,
+            remarks: document.getElementById('fitup-remarks').value
+          })
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Unable to save fit-up inspection.');
+        alert(`Fit-up inspection saved: ${payload.result}`);
+      } catch (error) {
+        alert(error.message || 'Unable to save fit-up inspection.');
       }
     });
 
