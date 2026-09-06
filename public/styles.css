@@ -894,6 +894,7 @@ body.detail-page {
     background: #34344d;
     font-size: 0.64rem;
     font-weight: 800;
+    text-decoration: none;
   }
 
   .assembly-table thead {

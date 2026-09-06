@@ -6,12 +6,15 @@ import QRCode from 'qrcode';
 import { z } from 'zod';
 import { createHash } from 'crypto';
 import { createPool } from 'mysql2/promise';
+import { existsSync } from 'fs';
+import { join, resolve } from 'path';
 
 const prisma = new PrismaClient();
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
 const publicAppUrl = process.env.PUBLIC_APP_URL ?? `http://localhost:${port}`;
 const powerFabDrawingsUrlTemplate = process.env.POWERFAB_DRAWINGS_URL_TEMPLATE ?? 'https://adani.teklapowerfab.net/pdc-job-overview?ProductionControlID={productionControlId}#sectionDrawings';
+const drawingsRoot = process.env.POWERFAB_DRAWINGS_ROOT ?? '';
 const projectTableCandidates = (process.env.POWERFAB_PROJECT_TABLES ?? 'projects,productioncontroljobs,externalprojects').split(',').map((value) => value.trim()).filter(Boolean);
 const projectJobColumn = process.env.POWERFAB_JOB_COLUMN ?? 'JobNumber';
 const projectDescriptionColumn = process.env.POWERFAB_DESCRIPTION_COLUMN ?? 'JobDescription';
@@ -685,6 +688,7 @@ app.get('/api/project-drawings', async (request, response) => {
     response.json({
       jobNumber: project.JobNumber,
       drawings: (drawingRows as Array<Record<string, any>>).map((drawing) => ({
+        drawingId: Number(drawing.DrawingID),
         drawingNumber: cleanPowerFabValue(drawing.DrawingNumber),
         drawingLog: 'Drawing',
         revision: cleanPowerFabValue(drawing.revision),
@@ -699,6 +703,33 @@ app.get('/api/project-drawings', async (request, response) => {
     console.error('Unable to load project drawings', error);
     response.status(500).json({ error: 'Failed to load project drawings from PowerFab.' });
   }
+});
+
+app.get('/api/drawings/:drawingId/pdf', async (request, response) => {
+  const drawingId = Number(request.params.drawingId);
+  if (!Number.isInteger(drawingId) || drawingId <= 0) return response.status(400).send('Invalid drawing ID');
+  if (!drawingsRoot) return response.status(404).send('Drawing PDF folder is not configured. Set POWERFAB_DRAWINGS_ROOT in .env.');
+
+  const [rows] = await mysqlConnection.query(
+    `SELECT d.DrawingNumber, dl.SubdirectoryPath
+     FROM drawings d
+     LEFT JOIN drawinglogs dl ON dl.DrawingLogID = d.DrawingLogID
+     WHERE d.DrawingID = ? LIMIT 1`,
+    [drawingId]
+  );
+  const drawing = (rows as Array<Record<string, any>>)[0];
+  if (!drawing) return response.status(404).send('Drawing not found');
+
+  const drawingNumber = String(drawing.DrawingNumber ?? '').replace(/[^A-Za-z0-9_.-]/g, '');
+  const relativeFolder = String(drawing.SubdirectoryPath ?? '').replace(/[\\/]+/g, '/').replace(/^\/+|\.\.+/g, '');
+  const candidates = [
+    resolve(join(drawingsRoot, relativeFolder, `${drawingNumber}.pdf`)),
+    resolve(join(drawingsRoot, `${drawingNumber}.pdf`))
+  ];
+  const root = resolve(drawingsRoot);
+  const filePath = candidates.find((candidate) => candidate.startsWith(root) && existsSync(candidate));
+  if (!filePath) return response.status(404).send(`PDF not found for drawing ${drawingNumber}`);
+  response.sendFile(filePath);
 });
 
 app.get('/api/assemblies/:qrCode/qr', async (request, response) => {
