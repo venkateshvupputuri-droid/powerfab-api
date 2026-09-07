@@ -133,9 +133,20 @@
                 color: #3a3a3a;
                 word-break: break-all;
               }
+              .print-button {
+                margin-top: 18px;
+                padding: 10px 22px;
+                border: 0;
+                border-radius: 5px;
+                background: #0d6ea7;
+                color: #fff;
+                font-size: 14px;
+                cursor: pointer;
+              }
               @media print {
                 body { background: #fff; }
                 .qr-card { box-shadow: none; border: 1px solid #222; }
+                .print-button { display: none; }
               }
             </style>
           </head>
@@ -144,18 +155,13 @@
               <div class="qr-title">${safeLabel}</div>
               <img id="qr-preview-image" src="${qrImageUrl}" alt="QR code for ${safeLabel}" />
               <div class="qr-code">${escapeHtml(qrCode)}</div>
+              <button type="button" class="print-button" id="print-button">Print</button>
             </div>
             <script>
-              const qrImage = document.getElementById('qr-preview-image');
-              let printStarted = false;
-              function openPrintPreview() {
-                if (printStarted) return;
-                printStarted = true;
+              document.getElementById('print-button').addEventListener('click', () => {
                 window.focus();
                 window.print();
-              }
-              qrImage.addEventListener('load', openPrintPreview, { once: true });
-              if (qrImage.complete && qrImage.naturalWidth > 0) openPrintPreview();
+              });
             <\/script>
           </body>
         </html>
