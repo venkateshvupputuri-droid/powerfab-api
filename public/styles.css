@@ -1265,6 +1265,11 @@ body.detail-page {
   }
 
   @media print {
+    @page {
+      size: 4in 4in;
+      margin: 0;
+    }
+
     body.printing-qr-preview > *:not(#qr-print-preview) {
       display: none !important;
     }
@@ -1287,16 +1292,51 @@ body.detail-page {
     }
 
     body.printing-qr-preview .qr-card {
-      margin: 24px auto;
+      width: 4in;
+      height: 4in;
+      margin: 0;
+      padding: 0.22in;
+      border: 1px solid #222;
+      border-radius: 0;
+      box-sizing: border-box;
+    }
+
+    body.printing-qr-preview .qr-card img {
+      width: 2.35in;
+      height: 2.35in;
+      margin: 0.12in auto 0.15in;
     }
 
     body.printing-qr-preview .drawing-preview-panel {
+      width: 4in;
       max-height: none;
       overflow: visible;
     }
 
     body.printing-qr-preview .drawing-preview-panel .sheet {
-      grid-template-columns: repeat(2, 1fr);
+      display: block;
+    }
+
+    body.printing-qr-preview .drawing-preview-panel .label {
+      width: 4in;
+      height: 4in;
+      margin: 0;
+      padding: 0.22in;
+      box-sizing: border-box;
+      border: 1px solid #222;
+      page-break-after: always;
+      break-after: page;
+    }
+
+    body.printing-qr-preview .drawing-preview-panel .label:last-child {
+      page-break-after: auto;
+      break-after: auto;
+    }
+
+    body.printing-qr-preview .drawing-preview-panel .label img {
+      width: 2.35in;
+      height: 2.35in;
+      margin: 0.12in auto 0.15in;
     }
   }
 
