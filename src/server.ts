@@ -481,9 +481,27 @@ const fitupInspectionInput = z.object({
 app.post('/api/auth/login', async (request, response) => {
   const input = contractorLoginInput.safeParse(request.body);
   if (!input.success) return response.status(400).json({ error: 'Username and password are required.' });
-  const [rows] = await mysqlConnection.query('SELECT id, username, contractorName, passwordHash FROM contractor_users WHERE username = ? AND active = TRUE LIMIT 1', [input.data.username]);
-  const contractor = (rows as Array<Record<string, any>>)[0];
-  if (!contractor || !verifyContractorPassword(input.data.password, contractor.passwordHash)) return response.status(401).json({ error: 'Invalid contractor login.' });
+  let contractor: Record<string, any> | undefined;
+
+  const [powerFabRows] = await mysqlConnection.query(
+    'SELECT Username, FirstName, LastName, PasswordHash, Active, HasLoginPermission FROM users WHERE Username = ? LIMIT 1',
+    [input.data.username]
+  );
+  const powerFabUser = (powerFabRows as Array<Record<string, any>>)[0];
+  if (powerFabUser && powerFabUser.Active && powerFabUser.HasLoginPermission && verifyPowerFabPassword(input.data.password, powerFabUser.PasswordHash)) {
+    const contractorName = [powerFabUser.FirstName, powerFabUser.LastName].filter(Boolean).join(' ') || powerFabUser.Username;
+    await mysqlConnection.query(
+      'INSERT INTO contractor_users (username, passwordHash, contractorName, active) VALUES (?, ?, ?, TRUE) ON DUPLICATE KEY UPDATE contractorName = VALUES(contractorName), active = TRUE',
+      [powerFabUser.Username, hashContractorPassword(randomBytes(32).toString('hex')), contractorName]
+    );
+    const [contractorRows] = await mysqlConnection.query('SELECT id, username, contractorName FROM contractor_users WHERE username = ? AND active = TRUE LIMIT 1', [powerFabUser.Username]);
+    contractor = (contractorRows as Array<Record<string, any>>)[0];
+  } else {
+    const [rows] = await mysqlConnection.query('SELECT id, username, contractorName, passwordHash FROM contractor_users WHERE username = ? AND active = TRUE LIMIT 1', [input.data.username]);
+    const localContractor = (rows as Array<Record<string, any>>)[0];
+    if (localContractor && verifyContractorPassword(input.data.password, localContractor.passwordHash)) contractor = localContractor;
+  }
+  if (!contractor) return response.status(401).json({ error: 'Invalid contractor login.' });
   const token = randomBytes(32).toString('hex');
   contractorSessions.set(token, { contractorId: Number(contractor.id), expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
   response.setHeader('Set-Cookie', `powerfab_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800`);
@@ -615,6 +633,12 @@ function verifyContractorPassword(password: string, storedHash: string) {
   return actual.length === expectedBuffer.length && timingSafeEqual(actual, expectedBuffer);
 }
 
+function verifyPowerFabPassword(password: string, storedHash: string) {
+  const expectedBuffer = Buffer.from(String(storedHash ?? ''), 'hex');
+  const actual = createHash('sha1').update(password).digest();
+  return expectedBuffer.length === actual.length && timingSafeEqual(actual, expectedBuffer);
+}
+
 function getSessionToken(request: express.Request) {
   const cookie = String(request.headers.cookie ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith('powerfab_session='));
   return cookie?.split('=')[1] ?? '';
@@ -631,14 +655,50 @@ function getContractorId(request: express.Request) {
 }
 
 async function contractorCanAccessJob(contractorId: number, jobNumber: string) {
-  const [rows] = await mysqlConnection.query('SELECT 1 FROM contractor_project_assignments WHERE contractorId = ? AND jobNumber = ? LIMIT 1', [contractorId, jobNumber]);
-  return (rows as Array<Record<string, any>>).length > 0;
+  const [assignedRows] = await mysqlConnection.query('SELECT 1 FROM contractor_project_assignments WHERE contractorId = ? AND jobNumber = ? LIMIT 1', [contractorId, jobNumber]);
+  if ((assignedRows as Array<Record<string, any>>).length > 0) return true;
+
+  const [powerFabRows] = await mysqlConnection.query(
+    `SELECT 1
+     FROM contractor_users cu
+     JOIN users u ON u.Username = cu.username AND u.Active = 1
+     JOIN useraccess ua ON ua.UserID = u.UserID AND ua.Type = 'PDC'
+     JOIN productioncontroljobs pcj ON pcj.JobNumber = ? AND CAST(ua.Value AS UNSIGNED) = pcj.ProductionControlID
+     WHERE cu.id = ? AND cu.active = TRUE
+     LIMIT 1`,
+    [jobNumber, contractorId]
+  );
+  return (powerFabRows as Array<Record<string, any>>).length > 0;
 }
 
 async function contractorCanAccessQr(contractorId: number, qrCode: string) {
   const assembly = await findAssemblyRecordByQrCode(qrCode);
   if (!assembly || !(await contractorCanAccessJob(contractorId, assembly.jobNumber))) return null;
   return assembly;
+}
+
+async function contractorCanSubmitFitupInspection(contractorId: number) {
+  const [rows] = await mysqlConnection.query(
+    `SELECT u.ExternalUser
+     FROM contractor_users cu
+     JOIN users u ON u.Username = cu.username AND u.Active = 1
+     WHERE cu.id = ? AND cu.active = TRUE
+     LIMIT 1`,
+    [contractorId]
+  );
+  const user = (rows as Array<Record<string, any>>)[0];
+  if (!user || !Boolean(user.ExternalUser)) return true;
+
+  const [permissionRows] = await mysqlConnection.query(
+    `SELECT 1
+     FROM contractor_users cu
+     JOIN users u ON u.Username = cu.username AND u.Active = 1
+     JOIN useraccess ua ON ua.UserID = u.UserID
+     WHERE cu.id = ? AND ua.Type = 'INSP' AND CAST(ua.Value AS UNSIGNED) = 1
+     LIMIT 1`,
+    [contractorId]
+  );
+  return (permissionRows as Array<Record<string, any>>).length > 0;
 }
 
 function buildPowerFabDrawingsUrl(productionControlId: number) {
@@ -1257,6 +1317,7 @@ app.post('/api/assemblies/:qrCode/fitup-inspections', async (request, response) 
   if (!input.success) return response.status(400).json({ error: 'Invalid fit-up inspection data.', details: input.error.flatten() });
   const assembly = await contractorCanAccessQr(contractorId, qrCode);
   if (!assembly) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
+  if (!(await contractorCanSubmitFitupInspection(contractorId))) return response.status(403).json({ error: 'Fit-up inspection permission is not granted in PowerFab.' });
 
   const [result] = await mysqlConnection.query(
     `INSERT INTO contractor_fitup_inspections (contractorId, qrCode, jobNumber, assemblyMark, result, inspector, remarks, checks)
