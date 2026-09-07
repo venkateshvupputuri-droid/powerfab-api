@@ -25,7 +25,7 @@
 
     <main class="detail-content">
       <div class="scan-shell">
-        <h1 class="project-title">Assembly Scan</h1>
+        <h1 class="project-title" id="scan-page-title">Assembly Inspection</h1>
 
         <div class="scan-card">
           <label class="scan-label" for="scan-qr-input">Scan or enter QR code</label>
@@ -33,7 +33,7 @@
             <input id="scan-qr-input" type="text" placeholder="Scan QR or paste code" autocomplete="off" />
             <button id="scan-camera-btn" type="button" class="secondary-button">Camera</button>
           </div>
-          <button id="scan-submit" type="button" class="scan-button">Load Assembly</button>
+          <button id="scan-submit" type="button" class="scan-button">Open Inspection</button>
         </div>
 
         <div id="camera-panel" class="camera-panel hidden">
@@ -98,8 +98,8 @@
           </div>
           <div id="boq-panel" class="boq-panel hidden"></div>
 
-          <div class="fitup-panel">
-            <h2>Vendor Fit-up Inspection</h2>
+          <div class="fitup-panel" id="fitup-inspection-panel">
+            <h2 id="fitup-title">Vendor Fit-up Inspection</h2>
             <label>Inspector<input id="fitup-inspector" placeholder="Inspector name"></label>
             <label>Result<select id="fitup-result"><option>PASS</option><option>FAIL</option><option>HOLD</option><option>RE-INSPECTION REQUIRED</option></select></label>
             <label>Remarks<textarea id="fitup-remarks" rows="3"></textarea></label>
@@ -121,6 +121,8 @@
     const currentStage = document.getElementById('scan-current-stage');
     const jobField = document.getElementById('scan-job-number');
     const contractorField = document.getElementById('scan-contractor-name');
+    const scanPageTitle = document.getElementById('scan-page-title');
+    const fitupTitle = document.getElementById('fitup-title');
     const stageSelect = document.getElementById('scan-stage-select');
     const submitButton = document.getElementById('scan-submit');
     const updateButton = document.getElementById('scan-update');
@@ -241,6 +243,9 @@
         jobField.textContent = payload.jobNumber || jobNumber || 'N/A';
         contractorField.textContent = payload.contractorName || 'Assigned contractor';
         resultBox.classList.remove('hidden');
+        const inspectionTitle = `Fit-up Inspection - ${payload.assemblyMark || payload.qrCode}`;
+        scanPageTitle.textContent = inspectionTitle;
+        fitupTitle.textContent = inspectionTitle;
         stageSelect.value = payload.currentStage || '';
         drawingButton.onclick = () => window.open(`/drawings.html?job=${encodeURIComponent(payload.jobNumber || jobNumber)}`, '_blank', 'noopener,noreferrer');
         boqButton.onclick = async () => {
@@ -254,6 +259,8 @@
           mainMark: payload.assemblyMark || '',
           pieceMark: payload.assemblyMark || ''
         });
+        document.getElementById('fitup-inspection-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('fitup-inspector').focus();
       } catch (error) {
         console.error(error);
         alert(error.message || 'QR code not found.');
