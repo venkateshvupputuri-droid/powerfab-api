@@ -965,10 +965,18 @@ app.get('/api/transmittal-drawings', async (request, response) => {
   if (!Number.isInteger(transmittalId) || transmittalId <= 0) return response.status(400).json({ error: 'transmittal query parameter is required' });
 
   try {
+    const productionControlId = Number(await getSingleValue('SELECT ProductionControlID FROM productioncontroljobs WHERE JobNumber = ? LIMIT 1', [context.jobNumber]));
     const [drawingRows] = await mysqlConnection.query(
       `SELECT DISTINCT d.DrawingID, d.DrawingNumber, d.Description,
               COALESCE(dr.Revision, '—') AS revision,
-              COALESCE(aps.Description, '—') AS approvalStatus
+              COALESCE(aps.Description, '—') AS approvalStatus,
+              (SELECT MIN(pca.ProductionControlAssemblyID)
+               FROM productioncontrolitems pci
+               JOIN productioncontrolassemblies pca
+                 ON pca.ProductionControlID = pci.ProductionControlID
+                AND pca.ProductionControlAssemblyID = pci.ProductionControlAssemblyID
+               WHERE pci.DrawingID = d.DrawingID
+                 AND pci.ProductionControlID = ?) AS productionControlAssemblyID
        FROM drawingtransmittals dt
        JOIN transmittals t ON t.TransmittalID = dt.TransmittalID
        JOIN drawings d ON d.DrawingID = dt.DrawingID
@@ -977,7 +985,7 @@ app.get('/api/transmittal-drawings', async (request, response) => {
        WHERE dt.TransmittalID = ? AND t.ProjectID = ?
        ORDER BY d.DrawingNumber
        LIMIT 2000`,
-      [transmittalId, Number(context.project.ProjectID)]
+      [productionControlId, transmittalId, Number(context.project.ProjectID)]
     );
 
     response.json({
@@ -989,7 +997,10 @@ app.get('/api/transmittal-drawings', async (request, response) => {
         description: cleanPowerFabValue(drawing.Description),
         revision: cleanPowerFabValue(drawing.revision),
         approvalStatus: cleanPowerFabValue(drawing.approvalStatus),
-        qrUrl: `/api/drawings/${Number(drawing.DrawingID)}/qr?job=${encodeURIComponent(context.jobNumber)}`
+        qrUrl: drawing.productionControlAssemblyID
+          ? `/api/assemblies/${encodeURIComponent(buildAssemblyQrCode(context.jobNumber, Number(drawing.productionControlAssemblyID)))}/qr`
+          : `/api/drawings/${Number(drawing.DrawingID)}/qr?job=${encodeURIComponent(context.jobNumber)}`,
+        qrType: drawing.productionControlAssemblyID ? 'assembly' : 'drawing'
       }))
     });
   } catch (error) {

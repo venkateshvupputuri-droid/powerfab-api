@@ -43,7 +43,7 @@
       rows.innerHTML = drawings.length ? drawings.map((drawing) => `
         <tr data-drawing-id="${drawing.drawingId}">
           <td><input class="drawing-check" type="checkbox" aria-label="Select ${escapeHtml(drawing.drawingNumber)}"></td>
-          <td><img class="drawing-qr" src="${drawing.qrUrl}" alt="QR code for ${escapeHtml(drawing.drawingNumber)}"></td>
+          <td><img class="drawing-qr" src="${drawing.qrUrl}" alt="Assembly QR code for ${escapeHtml(drawing.drawingNumber)}"></td>
           <td><strong>${escapeHtml(drawing.drawingNumber)}</strong></td>
           <td>${escapeHtml(drawing.revision)}</td>
           <td>${escapeHtml(drawing.description)}</td>
@@ -65,11 +65,11 @@
       preview.id = 'qr-print-preview';
       preview.innerHTML = `
         <div class="qr-preview-backdrop"></div>
-        <section class="qr-preview-panel drawing-preview-panel" role="dialog" aria-modal="true" aria-label="Drawing QR print preview">
+        <section class="qr-preview-panel drawing-preview-panel" role="dialog" aria-modal="true" aria-label="Assembly QR print preview">
           <button type="button" class="qr-preview-close" aria-label="Close preview">&times;</button>
           <div class="sheet">${items.map((drawing) => `
             <section class="label">
-              <img src="${escapeHtml(drawing.qrUrl)}" alt="QR code for ${escapeHtml(drawing.drawingNumber)}">
+              <img src="${escapeHtml(drawing.qrUrl)}" alt="Assembly QR code for ${escapeHtml(drawing.drawingNumber)}">
               <div class="number">${escapeHtml(drawing.drawingNumber)}</div>
               <div class="description">${escapeHtml(drawing.description)}</div>
             </section>`).join('')}</div>
