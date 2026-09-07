@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assembly Inspection</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="detail-page">
+  <div class="page-shell project-shell">
+    <header class="topbar detail-topbar">
+      <div class="topbar-left">
+        <button class="menu-button" type="button" aria-label="Open menu">&#9776;</button>
+        <div class="brand" aria-label="Tekla PowerFab Go">
+          <div class="brand-mark" aria-hidden="true"><span class="brand-mark-inner"></span></div>
+          <div class="brand-text"><span class="tekla">Tekla</span><span class="powerfab">PowerFab</span><span class="go">Go</span></div>
+        </div>
+      </div>
+    </header>
+    <main class="detail-content">
+      <div class="scan-shell">
+        <button id="back-scan" type="button" class="secondary-button">Back to Scan</button>
+        <h1 id="page-title" class="project-title">Assembly Inspection</h1>
+        <div id="error-message" class="login-error" role="alert"></div>
+        <div id="assembly-details" class="scan-result hidden">
+          <div class="scan-status-row"><span class="scan-status-label">Assembly</span><strong id="assembly-mark">—</strong></div>
+          <div class="scan-status-row"><span class="scan-status-label">Job</span><strong id="job-number">—</strong></div>
+          <div class="scan-status-row"><span class="scan-status-label">Current Stage</span><strong id="current-stage">—</strong></div>
+        </div>
+        <form id="inspection-form" class="fitup-panel hidden">
+          <h2>Vendor / Fit-up Inspection</h2>
+          <label>Inspector<input id="inspector" required maxlength="255" autocomplete="name"></label>
+          <label>Result<select id="result"><option>PASS</option><option>FAIL</option><option>HOLD</option><option>RE-INSPECTION REQUIRED</option></select></label>
+          <label>Remarks<textarea id="remarks" rows="5" maxlength="4000"></textarea></label>
+          <button type="submit" class="detail-button">Save Inspection</button>
+          <p id="save-message" role="status"></p>
+        </form>
+      </div>
+    </main>
+  </div>
+  <script>
+    const qrCode = new URLSearchParams(window.location.search).get('qr') || '';
+    const details = document.getElementById('assembly-details');
+    const form = document.getElementById('inspection-form');
+    const errorMessage = document.getElementById('error-message');
+    const saveMessage = document.getElementById('save-message');
+    const escapeHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+    document.getElementById('back-scan').onclick = () => { window.location.href = `/scan.html${qrCode ? `?qr=${encodeURIComponent(qrCode)}` : ''}`; };
+
+    async function loadInspection() {
+      if (!qrCode) { errorMessage.textContent = 'Scan an assembly QR code first.'; return; }
+      try {
+        const response = await fetch(`/api/assemblies/${encodeURIComponent(qrCode)}/status`);
+        const payload = await response.json();
+        if (response.status === 401) {
+          window.location.href = `/?return=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+          return;
+        }
+        if (!response.ok) throw new Error(payload.error || 'Unable to load this assembly.');
+        document.getElementById('page-title').textContent = `Inspection - ${payload.assemblyMark || qrCode}`;
+        document.getElementById('assembly-mark').textContent = payload.assemblyMark || qrCode;
+        document.getElementById('job-number').textContent = payload.jobNumber || '—';
+        document.getElementById('current-stage').textContent = payload.currentStage || 'Fitup';
+        details.classList.remove('hidden');
+        form.classList.remove('hidden');
+        document.getElementById('inspector').focus();
+      } catch (error) {
+        errorMessage.textContent = error.message || 'Unable to load inspection.';
+      }
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      saveMessage.textContent = 'Saving...';
+      try {
+        const response = await fetch(`/api/assemblies/${encodeURIComponent(qrCode)}/fitup-inspections`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            inspector: document.getElementById('inspector').value.trim(),
+            result: document.getElementById('result').value,
+            remarks: document.getElementById('remarks').value.trim()
+          })
+        });
+        const payload = await response.json();
+        if (response.status === 401) {
+          window.location.href = `/?return=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+          return;
+        }
+        if (!response.ok) throw new Error(payload.error || 'Unable to save inspection.');
+        saveMessage.textContent = `Inspection saved: ${payload.result}`;
+        form.reset();
+      } catch (error) {
+        saveMessage.textContent = error.message || 'Unable to save inspection.';
+      }
+    });
+
+    loadInspection();
+  </script>
+</body>
+</html>

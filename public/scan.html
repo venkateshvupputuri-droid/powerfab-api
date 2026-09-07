@@ -93,6 +93,7 @@
 
           <button id="scan-update" type="button" class="detail-button scan-update-btn">Save Station Update</button>
           <div class="scan-actions">
+            <button id="scan-inspection" type="button" class="detail-button">Open Inspection</button>
             <button id="scan-drawing" type="button" class="secondary-button">Open Drawing</button>
             <button id="scan-boq" type="button" class="secondary-button">View BOQ</button>
           </div>
@@ -127,6 +128,7 @@
     const submitButton = document.getElementById('scan-submit');
     const updateButton = document.getElementById('scan-update');
     const drawingButton = document.getElementById('scan-drawing');
+    const inspectionButton = document.getElementById('scan-inspection');
     const boqButton = document.getElementById('scan-boq');
     const boqPanel = document.getElementById('boq-panel');
     const cameraButton = document.getElementById('scan-camera-btn');
@@ -247,6 +249,7 @@
         scanPageTitle.textContent = inspectionTitle;
         fitupTitle.textContent = inspectionTitle;
         stageSelect.value = payload.currentStage || '';
+        inspectionButton.onclick = () => { window.location.href = `/inspection.html?qr=${encodeURIComponent(activeQrCode)}`; };
         drawingButton.onclick = () => window.open(`/drawings.html?job=${encodeURIComponent(payload.jobNumber || jobNumber)}`, '_blank', 'noopener,noreferrer');
         boqButton.onclick = async () => {
           const response = await fetch(`/api/assemblies/${encodeURIComponent(activeQrCode)}/boq`);
