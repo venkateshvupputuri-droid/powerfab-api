@@ -1009,6 +1009,9 @@ app.get('/api/transmittal-drawings', async (request, response) => {
         description: cleanPowerFabValue(drawing.Description),
         revision: cleanPowerFabValue(drawing.revision),
         approvalStatus: cleanPowerFabValue(drawing.approvalStatus),
+        qrCode: drawing.productionControlAssemblyID
+          ? buildAssemblyQrCode(context.jobNumber, Number(drawing.productionControlAssemblyID))
+          : '',
         qrUrl: drawing.productionControlAssemblyID
           ? `/api/assemblies/${encodeURIComponent(buildAssemblyQrCode(context.jobNumber, Number(drawing.productionControlAssemblyID)))}/qr`
           : `/api/drawings/${Number(drawing.DrawingID)}/qr?job=${encodeURIComponent(context.jobNumber)}`,

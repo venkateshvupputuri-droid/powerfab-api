@@ -71,6 +71,7 @@
             <section class="label">
               <img src="${escapeHtml(drawing.qrUrl)}" alt="Assembly QR code for ${escapeHtml(drawing.drawingNumber)}">
               <div class="number">${escapeHtml(drawing.drawingNumber)}</div>
+              <div class="qr-value">${escapeHtml(drawing.qrCode)}</div>
               <div class="description">${escapeHtml(drawing.description)}</div>
             </section>`).join('')}</div>
           <button type="button" class="print-button">Print</button>

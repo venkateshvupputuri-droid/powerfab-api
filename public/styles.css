@@ -1258,6 +1258,13 @@ body.detail-page {
     font-size: 12px;
   }
 
+  .drawing-preview-panel .qr-value {
+    margin-top: 5px;
+    color: #3a3a3a;
+    font-size: 11px;
+    word-break: break-all;
+  }
+
   @media (max-width: 640px) {
     .drawing-preview-panel .sheet {
       grid-template-columns: 1fr;
