@@ -84,88 +84,36 @@
     }
 
     function printAssemblyQr(qrCode, mainMark) {
-      const printWindow = window.open('', '_blank', 'width=540,height=760');
-      if (!printWindow) {
-        alert('Please allow pop-ups to print the QR code.');
-        return;
-      }
-
       const safeLabel = escapeHtml(mainMark || 'Assembly');
       const qrImageUrl = `/api/assemblies/${encodeURIComponent(qrCode)}/qr`;
+      document.getElementById('qr-print-preview')?.remove();
 
-      printWindow.document.open();
-      printWindow.document.write(`
-        <!doctype html>
-        <html>
-          <head>
-            <title>Print QR - ${safeLabel}</title>
-            <style>
-              body {
-                margin: 0;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                min-height: 100vh;
-                background: #fff;
-                color: #1b1b1b;
-                font-family: Arial, sans-serif;
-              }
-              .qr-card {
-                width: 360px;
-                padding: 24px 18px 18px;
-                border: 2px solid #0d6ea7;
-                border-radius: 12px;
-                text-align: center;
-                box-shadow: 0 8px 24px rgba(0,0,0,0.08);
-              }
-              .qr-card img {
-                display: block;
-                width: 230px;
-                height: 230px;
-                margin: 10px auto 18px;
-              }
-              .qr-title {
-                font-size: 18px;
-                font-weight: 700;
-                margin-bottom: 8px;
-              }
-              .qr-code {
-                font-size: 13px;
-                color: #3a3a3a;
-                word-break: break-all;
-              }
-              .print-button {
-                margin-top: 18px;
-                padding: 10px 22px;
-                border: 0;
-                border-radius: 5px;
-                background: #0d6ea7;
-                color: #fff;
-                font-size: 14px;
-                cursor: pointer;
-              }
-              @media print {
-                body { background: #fff; }
-                .qr-card { box-shadow: none; border: 1px solid #222; }
-                .print-button { display: none; }
-              }
-            </style>
-          </head>
-          <body>
-            <div class="qr-card">
-              <div class="qr-title">${safeLabel}</div>
-              <img id="qr-preview-image" src="${qrImageUrl}" alt="QR code for ${safeLabel}" />
-              <div class="qr-code">${escapeHtml(qrCode)}</div>
-              <button type="button" class="print-button" id="print-button">Print</button>
-            </div>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      printWindow.document.getElementById('print-button').addEventListener('click', () => {
-        printWindow.focus();
-        printWindow.print();
+      const preview = document.createElement('div');
+      preview.id = 'qr-print-preview';
+      preview.innerHTML = `
+        <div class="qr-preview-backdrop"></div>
+        <section class="qr-preview-panel" role="dialog" aria-modal="true" aria-label="QR print preview">
+          <button type="button" class="qr-preview-close" aria-label="Close preview">&times;</button>
+          <div class="qr-card">
+            <div class="qr-title">${safeLabel}</div>
+            <img src="${qrImageUrl}" alt="QR code for ${safeLabel}" />
+            <div class="qr-code">${escapeHtml(qrCode)}</div>
+          </div>
+          <button type="button" class="print-button">Print</button>
+        </section>`;
+      document.body.appendChild(preview);
+
+      const closePreview = () => preview.remove();
+      preview.querySelector('.qr-preview-backdrop').addEventListener('click', closePreview);
+      preview.querySelector('.qr-preview-close').addEventListener('click', closePreview);
+      preview.querySelector('.print-button').addEventListener('click', () => {
+        document.body.classList.add('printing-qr-preview');
+        window.print();
       });
+      window.addEventListener('afterprint', () => {
+        document.body.classList.remove('printing-qr-preview');
+        closePreview();
+      }, { once: true });
     }
 
     async function updateAssemblyStage(qrCode, selectElement) {
