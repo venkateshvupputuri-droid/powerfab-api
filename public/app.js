@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchInput = document.getElementById('job-search');
   const connectButton = document.getElementById('connect-powerfab');
   const projectsOpen = document.getElementById('projects-open');
+  const scanQrOpen = document.getElementById('scan-qr-open');
   const projectsPage = document.getElementById('projects-page');
   const loginForm = document.getElementById('contractor-login');
   const loginError = document.getElementById('login-error');
@@ -26,6 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
     contractorName.textContent = contractor.contractorName || contractor.username;
     connectButton.classList.remove('hidden');
     projectsOpen.classList.remove('hidden');
+    scanQrOpen.classList.remove('hidden');
   }
 
   loginForm.addEventListener('submit', async (event) => {
@@ -119,6 +121,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!state.loggedIn) return;
     document.querySelector('.landing-actions').classList.add('hidden');
     projectsPage.classList.remove('hidden');
+  });
+
+  scanQrOpen.addEventListener('click', () => {
+    window.location.href = '/scan.html';
   });
 
   bindFilterChanges();
