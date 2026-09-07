@@ -81,8 +81,6 @@
     const currentStage = document.getElementById('scan-current-stage');
     const jobField = document.getElementById('scan-job-number');
     const contractorField = document.getElementById('scan-contractor-name');
-    const scanPageTitle = document.getElementById('scan-page-title');
-    const fitupTitle = document.getElementById('fitup-title');
     const submitButton = document.getElementById('scan-submit');
     const drawingButton = document.getElementById('scan-drawing');
     const inspectionButton = document.getElementById('scan-inspection');
@@ -197,9 +195,6 @@
         jobField.textContent = payload.jobNumber || jobNumber || 'N/A';
         contractorField.textContent = payload.contractorName || 'Assigned contractor';
         resultBox.classList.remove('hidden');
-        const inspectionTitle = `Fit-up Inspection - ${payload.assemblyMark || payload.qrCode}`;
-        scanPageTitle.textContent = inspectionTitle;
-        fitupTitle.textContent = inspectionTitle;
         inspectionButton.onclick = () => { window.location.href = `/inspection.html?qr=${encodeURIComponent(activeQrCode)}`; };
         drawingButton.onclick = () => window.open(`/drawings.html?job=${encodeURIComponent(payload.jobNumber || jobNumber)}`, '_blank', 'noopener,noreferrer');
         boqButton.onclick = async () => {
