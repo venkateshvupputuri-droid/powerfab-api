@@ -59,53 +59,12 @@
             <strong id="scan-contractor-name">—</strong>
           </div>
 
-          <div class="station-form-grid">
-            <label>Main Mark<input name="mainMark" value="A1"></label>
-            <label>Piece Mark<input name="pieceMark" value="A1"></label>
-            <label>Sequence<input name="sequenceValue" value="1"></label>
-            <label>Lot No.<input name="lotNumber" value="3"></label>
-            <label>Quantity<input name="quantity" type="number" min="0" step="any" value=""></label>
-            <label>Instance No.<input name="instanceNumber" placeholder="3-8"></label>
-            <label>App<input name="app" value="A"></label>
-            <label>Inspection Failures<input name="inspectionFailures" type="number" min="0" step="1" value="0"></label>
-            <label>Completed By<input name="completedBy" placeholder="Operator name"></label>
-            <label>Hours<input name="hours" type="number" min="0" step="any" value="0"></label>
-            <label>Minutes<input name="minutes" type="number" min="0" step="any" value="0"></label>
-            <label>Batch ID<input name="batchId"></label>
-            <label>Work Area<input name="workArea" value="Main"></label>
-            <label>Weight<input name="weight" placeholder="19Kg each"></label>
-            <label>Finish<input name="finish" value="GLV"></label>
-            <label>Next station<input name="nextStation" placeholder="Sample - Layout/Weld"></label>
-            <label class="station-form-wide">Remark<input name="remark" value="Field"></label>
-          </div>
-
-          <label class="station-check"><input name="includeIfPreviousStationNotCompleted" type="checkbox"> Include if previous station not completed</label>
-          <label class="scan-label" for="scan-stage-select">Update station / stage</label>
-          <select id="scan-stage-select" class="stage-select scan-stage-select">
-            <option value="">Select stage</option>
-            <option value="Fitup">Fitup</option>
-            <option value="Inspection">Inspection</option>
-            <option value="Shifting to Paint">Shifting to Paint</option>
-            <option value="Painting">Painting</option>
-            <option value="Laydown">Laydown</option>
-            <option value="Shifting to Site">Shifting to Site</option>
-          </select>
-
-          <button id="scan-update" type="button" class="detail-button scan-update-btn">Save Station Update</button>
           <div class="scan-actions">
             <button id="scan-inspection" type="button" class="detail-button">Open Inspection</button>
             <button id="scan-drawing" type="button" class="secondary-button">Open Drawing</button>
             <button id="scan-boq" type="button" class="secondary-button">View BOQ</button>
           </div>
           <div id="boq-panel" class="boq-panel hidden"></div>
-
-          <div class="fitup-panel" id="fitup-inspection-panel">
-            <h2 id="fitup-title">Vendor Fit-up Inspection</h2>
-            <label>Inspector<input id="fitup-inspector" placeholder="Inspector name"></label>
-            <label>Result<select id="fitup-result"><option>PASS</option><option>FAIL</option><option>HOLD</option><option>RE-INSPECTION REQUIRED</option></select></label>
-            <label>Remarks<textarea id="fitup-remarks" rows="3"></textarea></label>
-            <button id="fitup-submit" type="button" class="detail-button">Submit Fit-up Inspection</button>
-          </div>
         </div>
       </div>
     </main>
@@ -124,9 +83,7 @@
     const contractorField = document.getElementById('scan-contractor-name');
     const scanPageTitle = document.getElementById('scan-page-title');
     const fitupTitle = document.getElementById('fitup-title');
-    const stageSelect = document.getElementById('scan-stage-select');
     const submitButton = document.getElementById('scan-submit');
-    const updateButton = document.getElementById('scan-update');
     const drawingButton = document.getElementById('scan-drawing');
     const inspectionButton = document.getElementById('scan-inspection');
     const boqButton = document.getElementById('scan-boq');
@@ -135,7 +92,6 @@
     const cameraPanel = document.getElementById('camera-panel');
     const cameraVideo = document.getElementById('camera-video');
     const cameraStopButton = document.getElementById('camera-stop');
-    const stationForm = document.querySelector('.station-form-grid');
 
     let activeQrCode = '';
     let cameraStream = null;
@@ -154,22 +110,6 @@
       } catch {
         return rawValue;
       }
-    }
-
-    function getStationData() {
-      return Object.fromEntries([...stationForm.querySelectorAll('input[name]')].map((input) => [
-        input.name,
-        input.type === 'checkbox' ? input.checked : input.value.trim()
-      ]));
-    }
-
-    function setStationData(data) {
-      if (!data) return;
-      stationForm.querySelectorAll('input[name]').forEach((input) => {
-        if (data[input.name] === null || data[input.name] === undefined) return;
-        if (input.type === 'checkbox') input.checked = Boolean(data[input.name]);
-        else input.value = data[input.name];
-      });
     }
 
     function stopCamera() {
@@ -260,7 +200,6 @@
         const inspectionTitle = `Fit-up Inspection - ${payload.assemblyMark || payload.qrCode}`;
         scanPageTitle.textContent = inspectionTitle;
         fitupTitle.textContent = inspectionTitle;
-        stageSelect.value = payload.currentStage || '';
         inspectionButton.onclick = () => { window.location.href = `/inspection.html?qr=${encodeURIComponent(activeQrCode)}`; };
         drawingButton.onclick = () => window.open(`/drawings.html?job=${encodeURIComponent(payload.jobNumber || jobNumber)}`, '_blank', 'noopener,noreferrer');
         boqButton.onclick = async () => {
@@ -270,12 +209,6 @@
           boqPanel.innerHTML = `<h3>BOQ - ${escapeHtml(boq.assemblyMark)}</h3><div class="boq-table-wrap"><table class="boq-table"><thead><tr><th>Mark</th><th>Piece Mark</th><th>Qty</th><th>Length</th><th>Weight</th></tr></thead><tbody>${boq.items.map((item) => `<tr><td>${escapeHtml(item.mainMark)}</td><td>${escapeHtml(item.pieceMark)}</td><td>${item.quantity}</td><td>${item.length}</td><td>${item.weight}</td></tr>`).join('')}</tbody></table></div>`;
           boqPanel.classList.remove('hidden');
         };
-        setStationData(payload.stationData || {
-          mainMark: payload.assemblyMark || '',
-          pieceMark: payload.assemblyMark || ''
-        });
-        document.getElementById('fitup-inspection-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
-        document.getElementById('fitup-inspector').focus();
       } catch (error) {
         console.error(error);
         alert(error.message || 'QR code not found.');
@@ -288,58 +221,6 @@
     qrInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
         loadAssemblyByQr();
-      }
-    });
-
-    updateButton.addEventListener('click', async () => {
-      const nextStage = stageSelect.value;
-      if (!activeQrCode || !nextStage) {
-        alert('Scan an assembly first and choose a stage.');
-        return;
-      }
-
-      try {
-        const response = await fetch(`/api/assemblies/${encodeURIComponent(activeQrCode)}/status`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            stage: nextStage,
-            stationData: getStationData(),
-            jobNumber: jobField.textContent !== 'N/A' ? jobField.textContent : (jobNumber || ''),
-            scannedBy: 'mobile-user',
-            note: `Station update via mobile scan: ${nextStage}`
-          })
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.error || 'Failed to save station update.');
-        }
-
-        currentStage.textContent = payload.currentStage || nextStage;
-        stageSelect.value = payload.currentStage || nextStage;
-        alert(`Station update saved: ${payload.currentStage}`);
-      } catch (error) {
-        console.error(error);
-        alert(error.message || 'Unable to save station update.');
-      }
-    });
-
-    document.getElementById('fitup-submit').addEventListener('click', async () => {
-      if (!activeQrCode) return alert('Scan an assembly first.');
-      try {
-        const response = await fetch(`/api/assemblies/${encodeURIComponent(activeQrCode)}/fitup-inspections`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            inspector: document.getElementById('fitup-inspector').value,
-            result: document.getElementById('fitup-result').value,
-            remarks: document.getElementById('fitup-remarks').value
-          })
-        });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || 'Unable to save fit-up inspection.');
-        alert(`Fit-up inspection saved: ${payload.result}`);
-      } catch (error) {
-        alert(error.message || 'Unable to save fit-up inspection.');
       }
     });
 

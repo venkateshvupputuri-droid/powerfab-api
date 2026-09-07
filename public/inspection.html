@@ -29,7 +29,24 @@
         </div>
         <form id="inspection-form" class="fitup-panel hidden">
           <h2>Vendor / Fit-up Inspection</h2>
-          <label>Inspector<input id="inspector" required maxlength="255" autocomplete="name"></label>
+          <div class="inspection-field-grid">
+            <label>Job #<input id="inspection-job" readonly></label>
+            <label>Main Mark<input id="main-mark" readonly></label>
+            <label>Piece Mark<input id="piece-mark"></label>
+            <label>Sequence<input id="sequence"></label>
+            <label>Lot #<input id="lot-number"></label>
+            <label>Work Package #<input id="work-package"></label>
+            <label>Quantity<input id="quantity" type="number" min="0" step="any"></label>
+            <label>Instance No.<input id="instance-number"></label>
+            <label>Approval Status<input id="approval-status"></label>
+            <label>Test Performed<input id="test-performed" type="datetime-local"></label>
+            <label>Location<input id="location"></label>
+            <label>Inspector<input id="inspector" required maxlength="255" autocomplete="name"></label>
+            <label>Test Hours<input id="test-hours" type="number" min="0" step="any"></label>
+            <label>Dimensions<input id="dimensions"></label>
+            <label>Grade<input id="grade"></label>
+            <label>Welding<input id="welding"></label>
+          </div>
           <label>Result<select id="result"><option>PASS</option><option>FAIL</option><option>HOLD</option><option>RE-INSPECTION REQUIRED</option></select></label>
           <label>Remarks<textarea id="remarks" rows="5" maxlength="4000"></textarea></label>
           <button type="submit" class="detail-button">Save Inspection</button>
@@ -62,6 +79,9 @@
         document.getElementById('assembly-mark').textContent = payload.assemblyMark || qrCode;
         document.getElementById('job-number').textContent = payload.jobNumber || '—';
         document.getElementById('current-stage').textContent = payload.currentStage || 'Fitup';
+        document.getElementById('inspection-job').value = payload.jobNumber || '';
+        document.getElementById('main-mark').value = payload.assemblyMark || '';
+        document.getElementById('test-performed').value = new Date().toISOString().slice(0, 16);
         details.classList.remove('hidden');
         form.classList.remove('hidden');
         document.getElementById('inspector').focus();
@@ -80,7 +100,24 @@
           body: JSON.stringify({
             inspector: document.getElementById('inspector').value.trim(),
             result: document.getElementById('result').value,
-            remarks: document.getElementById('remarks').value.trim()
+            remarks: document.getElementById('remarks').value.trim(),
+            checks: {
+              jobNumber: document.getElementById('inspection-job').value,
+              mainMark: document.getElementById('main-mark').value,
+              pieceMark: document.getElementById('piece-mark').value,
+              sequence: document.getElementById('sequence').value,
+              lotNumber: document.getElementById('lot-number').value,
+              workPackage: document.getElementById('work-package').value,
+              quantity: document.getElementById('quantity').value,
+              instanceNumber: document.getElementById('instance-number').value,
+              approvalStatus: document.getElementById('approval-status').value,
+              testPerformed: document.getElementById('test-performed').value,
+              location: document.getElementById('location').value,
+              testHours: document.getElementById('test-hours').value,
+              dimensions: document.getElementById('dimensions').value,
+              grade: document.getElementById('grade').value,
+              welding: document.getElementById('welding').value
+            }
           })
         });
         const payload = await response.json();

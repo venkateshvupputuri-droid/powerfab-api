@@ -486,7 +486,7 @@ const fitupInspectionInput = z.object({
   result: z.enum(['PASS', 'FAIL', 'HOLD', 'RE-INSPECTION REQUIRED']),
   inspector: z.string().trim().min(1).max(255),
   remarks: z.string().trim().max(4000).optional(),
-  checks: z.record(z.string(), z.enum(['PASS', 'FAIL', 'N/A'])).optional()
+  checks: z.record(z.string(), z.unknown()).optional()
 });
 
 app.post('/api/auth/login', async (request, response) => {
