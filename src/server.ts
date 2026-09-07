@@ -1178,7 +1178,13 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
 
 async function getAssemblyInstanceNumbers(productionControlID: number, productionControlAssemblyID: number) {
   const [rows] = await mysqlConnection.query(
-    'SELECT DISTINCT InstanceNumber FROM productioncontrolitems WHERE ProductionControlID = ? AND ProductionControlAssemblyID = ? AND InstanceNumber IS NOT NULL ORDER BY InstanceNumber',
+    `SELECT DISTINCT pin.InstanceNumber
+     FROM productioncontroliteminstancenumbers pin
+     JOIN productioncontrolitems pci ON pci.ProductionControlItemID = pin.ProductionControlItemID
+     WHERE pci.ProductionControlID = ?
+       AND pci.ProductionControlAssemblyID = ?
+       AND pin.InstanceNumber IS NOT NULL
+     ORDER BY pin.InstanceNumber`,
     [productionControlID, productionControlAssemblyID]
   );
   return (rows as Array<Record<string, any>>).map((row) => Number(row.InstanceNumber)).filter((value) => Number.isFinite(value));
