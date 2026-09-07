@@ -93,6 +93,7 @@
       const safeLabel = escapeHtml(mainMark || 'Assembly');
       const qrImageUrl = `/api/assemblies/${encodeURIComponent(qrCode)}/qr`;
 
+      printWindow.document.open();
       printWindow.document.write(`
         <!doctype html>
         <html>
@@ -157,16 +158,14 @@
               <div class="qr-code">${escapeHtml(qrCode)}</div>
               <button type="button" class="print-button" id="print-button">Print</button>
             </div>
-            <script>
-              document.getElementById('print-button').addEventListener('click', () => {
-                window.focus();
-                window.print();
-              });
-            <\/script>
           </body>
         </html>
       `);
       printWindow.document.close();
+      printWindow.document.getElementById('print-button').addEventListener('click', () => {
+        printWindow.focus();
+        printWindow.print();
+      });
     }
 
     async function updateAssemblyStage(qrCode, selectElement) {
