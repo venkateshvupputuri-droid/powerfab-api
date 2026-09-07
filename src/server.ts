@@ -484,11 +484,12 @@ app.post('/api/auth/login', async (request, response) => {
   let contractor: Record<string, any> | undefined;
 
   const [powerFabRows] = await mysqlConnection.query(
-    'SELECT Username, FirstName, LastName, PasswordHash, Active, HasLoginPermission FROM users WHERE Username = ? LIMIT 1',
+    'SELECT Username, FirstName, LastName, PasswordHash, Active, ExternalUser, HasLoginPermission, HasRLPermission FROM users WHERE Username = ? LIMIT 1',
     [input.data.username]
   );
   const powerFabUser = (powerFabRows as Array<Record<string, any>>)[0];
-  if (powerFabUser && powerFabUser.Active && powerFabUser.HasLoginPermission && verifyPowerFabPassword(input.data.password, powerFabUser.PasswordHash)) {
+  const hasRemoteLoginPermission = powerFabUser && (powerFabUser.HasLoginPermission || powerFabUser.HasRLPermission);
+  if (powerFabUser && powerFabUser.Active && hasRemoteLoginPermission && verifyPowerFabPassword(input.data.password, powerFabUser.PasswordHash)) {
     const contractorName = [powerFabUser.FirstName, powerFabUser.LastName].filter(Boolean).join(' ') || powerFabUser.Username;
     await mysqlConnection.query(
       'INSERT INTO contractor_users (username, passwordHash, contractorName, active) VALUES (?, ?, ?, TRUE) ON DUPLICATE KEY UPDATE contractorName = VALUES(contractorName), active = TRUE',
