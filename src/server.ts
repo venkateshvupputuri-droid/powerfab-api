@@ -1148,6 +1148,7 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
     jobNumber: history[0]?.jobNumber || assemblyMatch?.jobNumber || '',
     assemblyMark: history[0]?.assemblyMark || assemblyMatch?.assemblyMark || '',
     contractorName: assignedContractor,
+    availableInstanceNumbers: assemblyMatch ? await getAssemblyInstanceNumbers(assemblyMatch.productionControlID, assemblyMatch.productionControlAssemblyID) : [],
     stationData: stationRow ? {
       mainMark: stationRow.mainMark,
       pieceMark: stationRow.pieceMark,
@@ -1174,6 +1175,14 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
     history
   });
 });
+
+async function getAssemblyInstanceNumbers(productionControlID: number, productionControlAssemblyID: number) {
+  const [rows] = await mysqlConnection.query(
+    'SELECT DISTINCT InstanceNumber FROM productioncontrolitems WHERE ProductionControlID = ? AND ProductionControlAssemblyID = ? AND InstanceNumber IS NOT NULL ORDER BY InstanceNumber',
+    [productionControlID, productionControlAssemblyID]
+  );
+  return (rows as Array<Record<string, any>>).map((row) => Number(row.InstanceNumber)).filter((value) => Number.isFinite(value));
+}
 
 app.get('/api/assemblies/:qrCode/boq', async (request, response) => {
   const qrCode = String(request.params.qrCode || '').trim();

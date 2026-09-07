@@ -273,6 +273,42 @@ body.detail-page {
   box-sizing: border-box;
 }
 
+.inspection-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid rgba(20,20,20,0.18);
+}
+
+.inspection-tab {
+  border: 1px solid rgba(20,20,20,0.15);
+  border-bottom: 0;
+  padding: 9px 14px;
+  background: #e4e7eb;
+  color: #18354b;
+  cursor: pointer;
+}
+
+.inspection-tab.active {
+  background: #0d6ea7;
+  color: #fff;
+}
+
+.inspection-tab-panel {
+  display: none;
+}
+
+.inspection-tab-panel.active {
+  display: grid;
+  gap: 12px;
+}
+
+.document-list {
+  padding: 12px;
+  border: 1px dashed rgba(20,20,20,0.3);
+  color: #18354b;
+  font-size: 0.85rem;
+}
+
 @media (max-width: 640px) {
   .inspection-field-grid {
     grid-template-columns: 1fr;

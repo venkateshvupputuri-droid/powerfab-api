@@ -29,30 +29,45 @@
         </div>
         <form id="inspection-form" class="fitup-panel hidden">
           <h2>Vendor / Fit-up Inspection</h2>
-          <div class="inspection-field-grid">
-            <label>Job #<input id="inspection-job" readonly></label>
-            <label>Main Mark<input id="main-mark" readonly></label>
-            <label>Piece Mark<input id="piece-mark"></label>
-            <label>Sequence<input id="sequence"></label>
-            <label>Lot #<input id="lot-number"></label>
-            <label>Work Package #<input id="work-package"></label>
-            <label>Quantity<input id="quantity" type="number" min="0" step="any"></label>
-            <label>Instance No.<input id="instance-number"></label>
-            <label>Approval Status<input id="approval-status"></label>
-            <label>Test Performed<input id="test-performed" type="datetime-local"></label>
-            <label>Location<input id="location"></label>
-            <label>Inspector<input id="inspector" required maxlength="255" autocomplete="name"></label>
-            <label>Test Hours<input id="test-hours" type="number" min="0" step="any"></label>
-            <label>Dimensions<input id="dimensions"></label>
-            <label>Grade<input id="grade"></label>
-            <label>Welding<input id="welding"></label>
+          <div class="inspection-tabs" role="tablist">
+            <button type="button" class="inspection-tab active" data-tab="subject">Test Subject</button>
+            <button type="button" class="inspection-tab" data-tab="data">Test Data</button>
+            <button type="button" class="inspection-tab" data-tab="documents">Documents</button>
           </div>
-          <label>Result<select id="result"><option>PASS</option><option>FAIL</option><option>HOLD</option><option>RE-INSPECTION REQUIRED</option></select></label>
-          <label>Remarks<textarea id="remarks" rows="5" maxlength="4000"></textarea></label>
+          <section class="inspection-tab-panel active" data-panel="subject">
+            <div class="inspection-field-grid">
+              <label>Job #<input id="inspection-job" readonly></label>
+              <label>Main Mark<input id="main-mark" readonly></label>
+              <label>Piece Mark<input id="piece-mark"></label>
+              <label>Sequence<input id="sequence"></label>
+              <label>Lot #<input id="lot-number"></label>
+              <label>Work Package #<input id="work-package"></label>
+              <label>Quantity<input id="quantity" type="number" min="0" step="any"></label>
+              <label>Available Instance Numbers<input id="available-instances" readonly></label>
+              <label>Test Instance Numbers<input id="instance-number"></label>
+              <label>Approval Status<input id="approval-status"></label>
+            </div>
+          </section>
+          <section class="inspection-tab-panel" data-panel="data">
+            <div class="inspection-field-grid">
+              <label>Test Performed<input id="test-performed" type="datetime-local"></label>
+              <label>Location<input id="location"></label>
+              <label>Inspector<input id="inspector" required maxlength="255" autocomplete="name"></label>
+              <label>Test Hours<input id="test-hours" type="number" min="0" step="any"></label>
+              <label>Dimensions<input id="dimensions"></label>
+              <label>Grade<input id="grade"></label>
+              <label>Welding<input id="welding"></label>
+              <label>Result<select id="result"><option>PASS</option><option>FAIL</option><option>HOLD</option><option>RE-INSPECTION REQUIRED</option></select></label>
+            </div>
+            <label>Remarks<textarea id="remarks" rows="5" maxlength="4000"></textarea></label>
+          </section>
+          <section class="inspection-tab-panel" data-panel="documents">
+            <label>Attach Documents<input id="documents" type="file" multiple accept="image/*,.pdf,.txt,.doc,.docx"></label>
+            <div id="document-list" class="document-list">No documents selected.</div>
+          </section>
           <button type="submit" class="detail-button">Save Inspection</button>
           <p id="save-message" role="status"></p>
         </form>
-      </div>
     </main>
   </div>
   <script>
@@ -61,6 +76,7 @@
     const form = document.getElementById('inspection-form');
     const errorMessage = document.getElementById('error-message');
     const saveMessage = document.getElementById('save-message');
+    let selectedDocuments = [];
     const escapeHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
     document.getElementById('back-scan').onclick = () => { window.location.href = `/scan.html${qrCode ? `?qr=${encodeURIComponent(qrCode)}` : ''}`; };
@@ -81,10 +97,22 @@
         document.getElementById('current-stage').textContent = payload.currentStage || 'Fitup';
         document.getElementById('inspection-job').value = payload.jobNumber || '';
         document.getElementById('main-mark').value = payload.assemblyMark || '';
+        document.getElementById('available-instances').value = (payload.availableInstanceNumbers || []).join(', ');
         document.getElementById('test-performed').value = new Date().toISOString().slice(0, 16);
         details.classList.remove('hidden');
         form.classList.remove('hidden');
         document.getElementById('inspector').focus();
+
+        const existingResponse = await fetch(`/api/assemblies/${encodeURIComponent(qrCode)}/fitup-inspections`);
+        if (existingResponse.ok) {
+          const existing = await existingResponse.json();
+          const stored = existing.inspections?.[0]?.checks || {};
+          const previous = typeof stored === 'string' ? JSON.parse(stored) : stored;
+          Object.entries(previous).forEach(([key, value]) => {
+            const field = document.getElementById(key === 'instanceNumber' ? 'instance-number' : key);
+            if (field && typeof value === 'string') field.value = value;
+          });
+        }
       } catch (error) {
         errorMessage.textContent = error.message || 'Unable to load inspection.';
       }
@@ -116,7 +144,8 @@
               testHours: document.getElementById('test-hours').value,
               dimensions: document.getElementById('dimensions').value,
               grade: document.getElementById('grade').value,
-              welding: document.getElementById('welding').value
+              welding: document.getElementById('welding').value,
+              documents: selectedDocuments
             }
           })
         });
@@ -131,6 +160,21 @@
       } catch (error) {
         saveMessage.textContent = error.message || 'Unable to save inspection.';
       }
+    });
+
+    document.querySelectorAll('.inspection-tab').forEach((tab) => tab.addEventListener('click', () => {
+      document.querySelectorAll('.inspection-tab, .inspection-tab-panel').forEach((element) => element.classList.remove('active'));
+      tab.classList.add('active');
+      document.querySelector(`[data-panel="${tab.dataset.tab}"]`).classList.add('active');
+    }));
+
+    document.getElementById('documents').addEventListener('change', async (event) => {
+      selectedDocuments = await Promise.all([...event.target.files].map((file) => new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve({ name: file.name, type: file.type, size: file.size, data: reader.result });
+        reader.readAsDataURL(file);
+      })));
+      document.getElementById('document-list').textContent = selectedDocuments.map((file) => `${file.name} (${file.size} bytes)`).join(', ') || 'No documents selected.';
     });
 
     loadInspection();
