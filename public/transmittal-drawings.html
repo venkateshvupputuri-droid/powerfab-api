@@ -59,10 +59,35 @@
 
     function printDrawings(items) {
       if (!items.length) { window.alert('Select at least one drawing to print.'); return; }
-      const printWindow = window.open('', '_blank', 'noopener,noreferrer');
-      if (!printWindow) return;
-      printWindow.document.write(`<!doctype html><html><head><title>Drawing QR codes</title><style>body{font-family:Arial,sans-serif;margin:24px;color:#172b3a}.sheet{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}.label{border:1px solid #bbb;padding:16px;text-align:center;break-inside:avoid}.label img{width:220px;height:220px}.number{font-size:18px;font-weight:700;margin-top:8px}.description{font-size:12px;margin-top:5px}@media print{button{display:none}}</style></head><body><div class="sheet">${items.map((drawing) => `<section class="label"><img src="${drawing.qrUrl}" alt="QR code"><div class="number">${escapeHtml(drawing.drawingNumber)}</div><div class="description">${escapeHtml(drawing.description)}</div></section>`).join('')}</div><script>window.onload=()=>window.print();<\/script></body></html>`);
-      printWindow.document.close();
+      document.getElementById('qr-print-preview')?.remove();
+
+      const preview = document.createElement('div');
+      preview.id = 'qr-print-preview';
+      preview.innerHTML = `
+        <div class="qr-preview-backdrop"></div>
+        <section class="qr-preview-panel drawing-preview-panel" role="dialog" aria-modal="true" aria-label="Drawing QR print preview">
+          <button type="button" class="qr-preview-close" aria-label="Close preview">&times;</button>
+          <div class="sheet">${items.map((drawing) => `
+            <section class="label">
+              <img src="${escapeHtml(drawing.qrUrl)}" alt="QR code for ${escapeHtml(drawing.drawingNumber)}">
+              <div class="number">${escapeHtml(drawing.drawingNumber)}</div>
+              <div class="description">${escapeHtml(drawing.description)}</div>
+            </section>`).join('')}</div>
+          <button type="button" class="print-button">Print</button>
+        </section>`;
+      document.body.appendChild(preview);
+
+      const closePreview = () => preview.remove();
+      preview.querySelector('.qr-preview-backdrop').addEventListener('click', closePreview);
+      preview.querySelector('.qr-preview-close').addEventListener('click', closePreview);
+      preview.querySelector('.print-button').addEventListener('click', () => {
+        document.body.classList.add('printing-qr-preview');
+        window.print();
+      });
+      window.addEventListener('afterprint', () => {
+        document.body.classList.remove('printing-qr-preview');
+        closePreview();
+      }, { once: true });
     }
 
     document.getElementById('back-nav').onclick = () => { window.location.href = `/transmittals.html?job=${encodeURIComponent(jobNumber)}`; };
