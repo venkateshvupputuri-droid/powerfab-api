@@ -189,8 +189,19 @@ function buildAssemblyQrCode(jobNumber: string, assemblyKey: string | number) {
   return `pf-${createHash('sha256').update(base).digest('hex').slice(0, 12)}`;
 }
 
+function normalizeAssemblyQrCode(value: string) {
+  const rawValue = String(value || '').trim();
+  if (!rawValue) return '';
+  try {
+    const parsed = new URL(rawValue);
+    return parsed.searchParams.get('qr')?.trim() || rawValue;
+  } catch {
+    return rawValue;
+  }
+}
+
 async function findAssemblyRecordByQrCode(qrCode: string) {
-  const normalizedQrCode = String(qrCode || '').trim();
+  const normalizedQrCode = normalizeAssemblyQrCode(qrCode);
   if (!normalizedQrCode) return null;
 
   const [jobRows] = await mysqlConnection.query(
@@ -1096,7 +1107,7 @@ app.get('/api/assemblies/:qrCode/qr', async (request, response) => {
 });
 
 app.get('/api/assemblies/:qrCode/status', async (request, response) => {
-  const qrCode = String(request.params.qrCode || '').trim();
+  const qrCode = normalizeAssemblyQrCode(request.params.qrCode);
   if (!qrCode) return response.status(400).json({ error: 'QR code is required' });
   const contractorId = getContractorId(request);
   if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });

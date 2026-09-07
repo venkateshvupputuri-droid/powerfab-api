@@ -145,6 +145,17 @@
       return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
+    function normalizeQrValue(value) {
+      const rawValue = String(value || '').trim();
+      if (!rawValue) return '';
+      try {
+        const parsed = new URL(rawValue);
+        return parsed.searchParams.get('qr')?.trim() || rawValue;
+      } catch {
+        return rawValue;
+      }
+    }
+
     function getStationData() {
       return Object.fromEntries([...stationForm.querySelectorAll('input[name]')].map((input) => [
         input.name,
@@ -222,11 +233,12 @@
     }
 
     async function loadAssemblyByQr() {
-      const qrCode = (qrInput.value || '').trim();
+      const qrCode = normalizeQrValue(qrInput.value);
       if (!qrCode) {
         alert('Please scan or enter a QR code.');
         return;
       }
+      qrInput.value = qrCode;
 
       try {
         const response = await fetch(`/api/assemblies/${encodeURIComponent(qrCode)}/status`);
