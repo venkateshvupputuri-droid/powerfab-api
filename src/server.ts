@@ -1190,6 +1190,79 @@ async function getAssemblyInstanceNumbers(productionControlID: number, productio
   return (rows as Array<Record<string, any>>).map((row) => Number(row.InstanceNumber)).filter((value) => Number.isFinite(value));
 }
 
+async function syncInspectionToPowerFab(assembly: Record<string, any>, inspection: z.infer<typeof fitupInspectionInput>) {
+  const checks = inspection.checks ?? {};
+  const productionControlID = Number(assembly.productionControlID ?? 0);
+  const productionControlAssemblyID = Number(assembly.productionControlAssemblyID ?? 0);
+  if (!productionControlID || !productionControlAssemblyID) return;
+
+  const [stationRows] = await mysqlConnection.query(
+    `SELECT ProductionControlItemStationID, Quantity
+     FROM productioncontrolitemstations
+     WHERE ProductionControlID = ? AND MainMark = ?
+     ORDER BY ProductionControlItemStationID DESC LIMIT 1`,
+    [productionControlID, assembly.assemblyMark]
+  );
+  const station = (stationRows as Array<Record<string, any>>)[0];
+  const [itemRows] = await mysqlConnection.query(
+    `SELECT ProductionControlItemID
+     FROM productioncontrolitems
+     WHERE ProductionControlID = ? AND ProductionControlAssemblyID = ?
+     ORDER BY ProductionControlItemID LIMIT 1`,
+    [productionControlID, productionControlAssemblyID]
+  );
+  const item = (itemRows as Array<Record<string, any>>)[0];
+  if (!station || !item) return;
+
+  const testDate = checks.testPerformed ? new Date(String(checks.testPerformed)) : new Date();
+  const [recordResult] = await mysqlConnection.query(
+    `INSERT INTO inspectiontestrecords (
+      InspectionTestID, InspectionTestVersionID, Quantity, TestHours, TestDateTime,
+      TestUpdatedDateTime, InspectionTestLocationID, TestFailed,
+      ProductionControlItemStationID, ProductionControlItemStationQuantity, UpdateCount
+    ) VALUES (1, 3, ?, ?, ?, ?, 1, ?, ?, ?, 0)`,
+    [
+      Number(checks.quantity || station.Quantity || 1),
+      Number(checks.testHours || 0),
+      testDate,
+      new Date(),
+      inspection.result !== 'PASS' ? 1 : 0,
+      Number(station.ProductionControlItemStationID),
+      Number(checks.quantity || station.Quantity || 1)
+    ]
+  );
+  const inspectionTestRecordID = Number((recordResult as any).insertId);
+
+  const fieldValues = [
+    [11, checks.dimensions],
+    [12, checks.grade],
+    [13, checks.welding]
+  ].filter(([, value]) => value !== undefined && String(value).trim() !== '');
+  for (const [inspectionTestFieldID, value] of fieldValues) {
+    const [stringResult] = await mysqlConnection.query(
+      'INSERT INTO inspectionteststrings (String) VALUES (?)',
+      [String(value)]
+    );
+    const [fieldResult] = await mysqlConnection.query(
+      `INSERT INTO inspectiontestrecordfields
+       (InspectionTestRecordID, InspectionTestFieldID, FieldInstance, ValueStringID, IndicatesFailure)
+       VALUES (?, ?, 1, ?, 0)`,
+      [inspectionTestRecordID, inspectionTestFieldID, Number((stringResult as any).insertId)]
+    );
+    void fieldResult;
+  }
+
+  const instanceNumber = Number(checks.instanceNumber || 0);
+  if (instanceNumber > 0) {
+    await mysqlConnection.query(
+      `INSERT INTO inspectiontestrecordinstancenumbers
+       (InspectionTestRecordID, ProductionControlItemID, InstanceNumber)
+       VALUES (?, ?, ?)`,
+      [inspectionTestRecordID, Number(item.ProductionControlItemID), instanceNumber]
+    );
+  }
+}
+
 app.get('/api/assemblies/:qrCode/boq', async (request, response) => {
   const qrCode = String(request.params.qrCode || '').trim();
   const contractorId = getContractorId(request);
@@ -1365,6 +1438,12 @@ app.post('/api/assemblies/:qrCode/fitup-inspections', async (request, response) 
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [contractorId, qrCode, assembly.jobNumber, assembly.assemblyMark, input.data.result, input.data.inspector, input.data.remarks ?? null, JSON.stringify(input.data.checks ?? {})]
   );
+  try {
+    await syncInspectionToPowerFab(assembly, input.data);
+  } catch (error) {
+    console.error('Unable to sync inspection to PowerFab tables', error);
+    return response.status(500).json({ error: 'Inspection was saved in the portal but could not be written to PowerFab.' });
+  }
   response.status(201).json({ saved: true, inspectionId: (result as any).insertId, result: input.data.result });
 });
 
