@@ -142,17 +142,25 @@
           <body>
             <div class="qr-card">
               <div class="qr-title">${safeLabel}</div>
-              <img src="${qrImageUrl}" alt="QR code for ${safeLabel}" />
+              <img id="qr-preview-image" src="${qrImageUrl}" alt="QR code for ${safeLabel}" />
               <div class="qr-code">${escapeHtml(qrCode)}</div>
             </div>
+            <script>
+              const qrImage = document.getElementById('qr-preview-image');
+              let printStarted = false;
+              function openPrintPreview() {
+                if (printStarted) return;
+                printStarted = true;
+                window.focus();
+                window.print();
+              }
+              qrImage.addEventListener('load', openPrintPreview, { once: true });
+              if (qrImage.complete && qrImage.naturalWidth > 0) openPrintPreview();
+            <\/script>
           </body>
         </html>
       `);
       printWindow.document.close();
-      setTimeout(() => {
-        printWindow.focus();
-        printWindow.print();
-      }, 250);
     }
 
     async function updateAssemblyStage(qrCode, selectElement) {
@@ -245,7 +253,7 @@
                   <img src="/api/assemblies/${encodeURIComponent(qrCode)}/qr" alt="QR code for ${item.mainMark || 'assembly'}" class="assembly-qr" />
                 </td>
                 <td>
-                  <button type="button" class="print-qr-btn" data-qr="${qrCode}" data-mainmark="${escapeHtml(item.mainMark || 'Assembly')}">Print QR</button>
+                  <button type="button" class="print-qr-btn" data-qr="${qrCode}" data-mainmark="${escapeHtml(item.mainMark || 'Assembly')}">Print preview</button>
                 </td>
               </tr>
             `;
