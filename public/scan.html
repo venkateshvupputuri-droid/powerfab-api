@@ -196,7 +196,7 @@
         contractorField.textContent = payload.contractorName || 'Assigned contractor';
         resultBox.classList.remove('hidden');
         inspectionButton.onclick = () => { window.location.href = `/inspection.html?qr=${encodeURIComponent(activeQrCode)}`; };
-        drawingButton.onclick = () => window.open(`/drawings.html?job=${encodeURIComponent(payload.jobNumber || jobNumber)}`, '_blank', 'noopener,noreferrer');
+        drawingButton.onclick = () => window.open(`/drawings.html?job=${encodeURIComponent(payload.jobNumber || jobNumber)}${payload.drawingId ? `&drawing=${encodeURIComponent(payload.drawingId)}` : ''}`, '_blank', 'noopener,noreferrer');
         boqButton.onclick = async () => {
           const response = await fetch(`/api/assemblies/${encodeURIComponent(activeQrCode)}/boq`);
           const boq = await response.json();

@@ -55,7 +55,7 @@ const mysqlConnection = (() => {
 })();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '15mb' }));
 app.use(express.static('public'));
 
 const statuses = Object.values(FabricationStatus);
@@ -1141,6 +1141,7 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
   const stationRow = (stationRows as Array<Record<string, any>>)[0] ?? null;
 
   const assemblyMatch = await findAssemblyRecordByQrCode(qrCode);
+  const assemblyDrawing = assemblyMatch ? await getAssemblyDrawing(assemblyMatch.productionControlID, assemblyMatch.productionControlAssemblyID) : null;
   const currentStage = history[0]?.stage ?? 'Fitup';
   response.json({
     qrCode,
@@ -1148,6 +1149,8 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
     jobNumber: history[0]?.jobNumber || assemblyMatch?.jobNumber || '',
     assemblyMark: history[0]?.assemblyMark || assemblyMatch?.assemblyMark || '',
     contractorName: assignedContractor,
+    drawingId: assemblyDrawing ? Number(assemblyDrawing.DrawingID) : null,
+    drawingNumber: assemblyDrawing ? cleanPowerFabValue(assemblyDrawing.DrawingNumber) : '',
     availableInstanceNumbers: assemblyMatch ? await getAssemblyInstanceNumbers(assemblyMatch.productionControlID, assemblyMatch.productionControlAssemblyID) : [],
     stationData: stationRow ? {
       mainMark: stationRow.mainMark,
@@ -1208,6 +1211,18 @@ async function getInspectionOptions() {
     if (!options[fieldName].includes(String(row.optionValue))) options[fieldName].push(String(row.optionValue));
     return options;
   }, {});
+}
+
+async function getAssemblyDrawing(productionControlID: number, productionControlAssemblyID: number) {
+  const [rows] = await mysqlConnection.query(
+    `SELECT d.DrawingID, d.DrawingNumber
+     FROM productioncontrolitems pci
+     JOIN drawings d ON d.DrawingID = pci.DrawingID
+     WHERE pci.ProductionControlID = ? AND pci.ProductionControlAssemblyID = ?
+     ORDER BY pci.ProductionControlItemID LIMIT 1`,
+    [productionControlID, productionControlAssemblyID]
+  );
+  return (rows as Array<Record<string, any>>)[0] ?? null;
 }
 
 async function syncInspectionToPowerFab(assembly: Record<string, any>, inspection: z.infer<typeof fitupInspectionInput>) {
@@ -1279,6 +1294,35 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
        (InspectionTestRecordID, ProductionControlItemID, InstanceNumber)
        VALUES (?, ?, ?)`,
       [inspectionTestRecordID, Number(item.ProductionControlItemID), instanceNumber]
+    );
+  }
+}
+
+async function markAssemblyPieceTrackingComplete(assembly: Record<string, any>, checks: Record<string, unknown>) {
+  const productionControlID = Number(assembly.productionControlID ?? 0);
+  const productionControlAssemblyID = Number(assembly.productionControlAssemblyID ?? 0);
+  if (!productionControlID || !productionControlAssemblyID) return;
+  await mysqlConnection.query(
+    `UPDATE productioncontrolitemstationsummary s
+     JOIN productioncontrolitems pci ON pci.ProductionControlItemID = s.ProductionControlItemID
+     SET s.QuantityCompleted = s.TotalQuantity,
+         s.LastDateCompleted = CURDATE(),
+         s.FailedInspectionTestQuantity = 0
+     WHERE pci.ProductionControlID = ?
+       AND pci.ProductionControlAssemblyID = ?
+       AND s.StationID = 6`,
+    [productionControlID, productionControlAssemblyID]
+  );
+  const instanceNumber = Number(checks.instanceNumber || 0);
+  if (instanceNumber > 0) {
+    await mysqlConnection.query(
+      `UPDATE productioncontrolitemstationsummaryinstancenumbers si
+       JOIN productioncontrolitemstationsummary s ON s.ProductionControlItemStationSummaryID = si.ProductionControlItemStationSummaryID
+       JOIN productioncontrolitems pci ON pci.ProductionControlItemID = si.ProductionControlItemID
+       SET si.Completed = 1, si.DateCompleted = CURDATE(), si.HasFailedInspectionTest = 0
+       WHERE pci.ProductionControlID = ? AND pci.ProductionControlAssemblyID = ?
+         AND s.StationID = 6 AND si.InstanceNumber = ?`,
+      [productionControlID, productionControlAssemblyID, instanceNumber]
     );
   }
 }
@@ -1460,6 +1504,7 @@ app.post('/api/assemblies/:qrCode/fitup-inspections', async (request, response) 
   );
   try {
     await syncInspectionToPowerFab(assembly, input.data);
+    if (input.data.result === 'PASS') await markAssemblyPieceTrackingComplete(assembly, input.data.checks ?? {});
   } catch (error) {
     console.error('Unable to sync inspection to PowerFab tables', error);
     return response.status(500).json({ error: 'Inspection was saved in the portal but could not be written to PowerFab.' });

@@ -42,6 +42,7 @@
   <script>
     const params = new URLSearchParams(window.location.search);
     const jobNumber = params.get('job') || '';
+    const drawingId = params.get('drawing') || '';
     const title = document.getElementById('drawings-title');
     const rows = document.getElementById('drawing-rows');
     const search = document.getElementById('drawing-search');
@@ -53,7 +54,7 @@
 
     function render() {
       const query = search.value.trim().toLowerCase();
-      const filtered = drawings.filter((drawing) => `${drawing.drawingNumber} ${drawing.description}`.toLowerCase().includes(query));
+      const filtered = drawings.filter((drawing) => (!drawingId || String(drawing.drawingId) === drawingId) && `${drawing.drawingNumber} ${drawing.description}`.toLowerCase().includes(query));
       rows.innerHTML = filtered.length ? filtered.map((drawing) => `
         <tr>
           <td><a class="drawing-pdf" href="/api/drawings/${drawing.drawingId}/pdf" target="_blank" rel="noopener">PDF</a></td>
@@ -78,7 +79,7 @@
     } else {
       fetch(`/api/project-drawings?job=${encodeURIComponent(jobNumber)}`)
         .then(async (response) => { const payload = await response.json(); if (!response.ok) throw new Error(payload.error || 'Unable to load drawings'); return payload; })
-        .then((payload) => { drawings = payload.drawings || []; title.textContent = `${payload.jobNumber} Drawings (${drawings.length})`; render(); })
+        .then((payload) => { drawings = payload.drawings || []; title.textContent = drawingId ? `${payload.jobNumber} Drawing` : `${payload.jobNumber} Drawings (${drawings.length})`; render(); })
         .catch((error) => { title.textContent = `${jobNumber} Drawings`; rows.innerHTML = `<tr><td colspan="9">${escapeHtml(error.message)}</td></tr>`; });
     }
   </script>

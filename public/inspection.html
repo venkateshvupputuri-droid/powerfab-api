@@ -68,6 +68,10 @@
           <button type="submit" class="detail-button">Save Inspection</button>
           <p id="save-message" role="status"></p>
         </form>
+        <section id="inspection-history" class="inspection-history hidden">
+          <h2>Saved Inspection History</h2>
+          <div id="history-list"></div>
+        </section>
     </main>
   </div>
   <script>
@@ -77,9 +81,21 @@
     const errorMessage = document.getElementById('error-message');
     const saveMessage = document.getElementById('save-message');
     let selectedDocuments = [];
+    const historyPanel = document.getElementById('inspection-history');
+    const historyList = document.getElementById('history-list');
     const escapeHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
     document.getElementById('back-scan').onclick = () => { window.location.href = `/scan.html${qrCode ? `?qr=${encodeURIComponent(qrCode)}` : ''}`; };
+
+    function lockInspectionForm() {
+      form.querySelectorAll('input, select, textarea, button[type="submit"], input[type="file"]').forEach((field) => { field.disabled = true; });
+      saveMessage.textContent = 'This inspection is already saved and locked.';
+    }
+
+    function renderHistory(inspections) {
+      historyList.innerHTML = inspections.map((inspection) => `<article class="inspection-history-item"><strong>${escapeHtml(inspection.result)}</strong><span>${escapeHtml(inspection.inspector)} · ${escapeHtml(inspection.createdAt)}</span><p>${escapeHtml(inspection.remarks || 'No remarks')}</p></article>`).join('');
+      historyPanel.classList.remove('hidden');
+    }
 
     async function loadInspection() {
       if (!qrCode) { errorMessage.textContent = 'Scan an assembly QR code first.'; return; }
@@ -118,6 +134,10 @@
             const field = document.getElementById(key === 'instanceNumber' ? 'instance-number' : key);
             if (field && typeof value === 'string') field.value = value;
           });
+          if (existing.inspections?.length) {
+            renderHistory(existing.inspections);
+            lockInspectionForm();
+          }
         }
       } catch (error) {
         errorMessage.textContent = error.message || 'Unable to load inspection.';
@@ -162,7 +182,9 @@
         }
         if (!response.ok) throw new Error(payload.error || 'Unable to save inspection.');
         saveMessage.textContent = `Inspection saved: ${payload.result}`;
-        form.reset();
+        form.querySelectorAll('input, select, textarea').forEach((field) => { field.disabled = true; });
+        event.submitter.disabled = true;
+        saveMessage.textContent = `Inspection saved: ${payload.result}. This inspection is now locked.`;
       } catch (error) {
         saveMessage.textContent = error.message || 'Unable to save inspection.';
       }

@@ -309,6 +309,30 @@ body.detail-page {
   font-size: 0.85rem;
 }
 
+.inspection-history {
+  margin-top: 18px;
+  padding: 16px;
+  border-top: 1px solid rgba(20,20,20,0.18);
+}
+
+.inspection-history h2 {
+  color: #18354b;
+  font-size: 1.1rem;
+}
+
+.inspection-history-item {
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(20,20,20,0.12);
+}
+
+.inspection-history-item span,
+.inspection-history-item p {
+  display: block;
+  margin: 4px 0 0;
+  color: #475b6b;
+  font-size: 0.85rem;
+}
+
 @media (max-width: 640px) {
   .inspection-field-grid {
     grid-template-columns: 1fr;
