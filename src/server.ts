@@ -1227,6 +1227,7 @@ async function getAssemblyDrawing(productionControlID: number, productionControl
 
 async function syncInspectionToPowerFab(assembly: Record<string, any>, inspection: z.infer<typeof fitupInspectionInput>) {
   const checks = inspection.checks ?? {};
+  const instanceNumbers = String(checks.instanceNumber ?? '').split(',').map((value) => Number(value.trim())).filter((value, index, values) => value > 0 && values.indexOf(value) === index);
   const productionControlID = Number(assembly.productionControlID ?? 0);
   const productionControlAssemblyID = Number(assembly.productionControlAssemblyID ?? 0);
   if (!productionControlID || !productionControlAssemblyID) return;
@@ -1249,21 +1250,44 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
   const item = (itemRows as Array<Record<string, any>>)[0];
   if (!station || !item) return;
 
+  const [subtypeResult] = await mysqlConnection.query(
+    `INSERT INTO inspectiontestsubtypes
+     (ProductionControlID, JobNumber, MainMark, PieceMark, SequenceID, Sequence, LotNumber, WorkPackageID, WorkPackageNumber, LoadNumber, UserID)
+     VALUES (?, ?, ?, ?, 0, ?, ?, NULL, ?, NULL, NULL)`,
+    [
+      productionControlID,
+      String(checks.jobNumber || assembly.jobNumber),
+      String(checks.mainMark || assembly.assemblyMark),
+      String(checks.pieceMark || assembly.assemblyMark),
+      String(checks.sequence || ''),
+      String(checks.lotNumber || ''),
+      String(checks.workPackage || '')
+    ]
+  );
+  const inspectionTestSubTypeID = Number((subtypeResult as any).insertId);
+  const [instanceStringResult] = await mysqlConnection.query(
+    'INSERT INTO inspectionteststrings (String) VALUES (?)',
+    [instanceNumbers.join(',')]
+  );
+  const instanceNumberStringID = Number((instanceStringResult as any).insertId);
+
   const testDate = checks.testPerformed ? new Date(String(checks.testPerformed)) : new Date();
   const [recordResult] = await mysqlConnection.query(
     `INSERT INTO inspectiontestrecords (
-      InspectionTestID, InspectionTestVersionID, Quantity, TestHours, TestDateTime,
+      InspectionTestID, InspectionTestVersionID, InspectionTestSubTypeID, Quantity, TestHours, TestDateTime,
       TestUpdatedDateTime, InspectionTestLocationID, TestFailed,
-      ProductionControlItemStationID, ProductionControlItemStationQuantity, UpdateCount
-    ) VALUES (1, 3, ?, ?, ?, ?, 1, ?, ?, ?, 0)`,
+      ProductionControlItemStationID, ProductionControlItemStationQuantity, InstanceNumberStringID, UpdateCount
+    ) VALUES (1, 3, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 0)`,
     [
-      Number(checks.quantity || station.Quantity || 1),
+      inspectionTestSubTypeID,
+      instanceNumbers.length || Number(checks.quantity || station.Quantity || 1),
       Number(checks.testHours || 0),
       testDate,
       new Date(),
       inspection.result !== 'PASS' ? 1 : 0,
       Number(station.ProductionControlItemStationID),
-      Number(checks.quantity || station.Quantity || 1)
+      instanceNumbers.length || Number(checks.quantity || station.Quantity || 1),
+      instanceNumberStringID
     ]
   );
   const inspectionTestRecordID = Number((recordResult as any).insertId);
@@ -1287,8 +1311,7 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
     void fieldResult;
   }
 
-  const instanceNumber = Number(checks.instanceNumber || 0);
-  if (instanceNumber > 0) {
+  for (const instanceNumber of instanceNumbers) {
     await mysqlConnection.query(
       `INSERT INTO inspectiontestrecordinstancenumbers
        (InspectionTestRecordID, ProductionControlItemID, InstanceNumber)
@@ -1302,27 +1325,40 @@ async function markAssemblyPieceTrackingComplete(assembly: Record<string, any>, 
   const productionControlID = Number(assembly.productionControlID ?? 0);
   const productionControlAssemblyID = Number(assembly.productionControlAssemblyID ?? 0);
   if (!productionControlID || !productionControlAssemblyID) return;
-  await mysqlConnection.query(
-    `UPDATE productioncontrolitemstationsummary s
-     JOIN productioncontrolitems pci ON pci.ProductionControlItemID = s.ProductionControlItemID
-     SET s.QuantityCompleted = s.TotalQuantity,
-         s.LastDateCompleted = CURDATE(),
-         s.FailedInspectionTestQuantity = 0
-     WHERE pci.ProductionControlID = ?
-       AND pci.ProductionControlAssemblyID = ?
-       AND s.StationID = 6`,
-    [productionControlID, productionControlAssemblyID]
-  );
-  const instanceNumber = Number(checks.instanceNumber || 0);
-  if (instanceNumber > 0) {
+  const instanceNumbers = String(checks.instanceNumber ?? '').split(',').map((value) => Number(value.trim())).filter((value, index, values) => value > 0 && values.indexOf(value) === index);
+  if (instanceNumbers.length > 0) {
+    const [itemRows] = await mysqlConnection.query(
+      `SELECT ProductionControlItemID FROM productioncontrolitems
+       WHERE ProductionControlID = ? AND ProductionControlAssemblyID = ? AND InstanceTracking = 3
+       ORDER BY ProductionControlItemID LIMIT 1`,
+      [productionControlID, productionControlAssemblyID]
+    );
+    const item = (itemRows as Array<Record<string, any>>)[0];
+    if (!item) return;
     await mysqlConnection.query(
-      `UPDATE productioncontrolitemstationsummaryinstancenumbers si
-       JOIN productioncontrolitemstationsummary s ON s.ProductionControlItemStationSummaryID = si.ProductionControlItemStationSummaryID
-       JOIN productioncontrolitems pci ON pci.ProductionControlItemID = si.ProductionControlItemID
-       SET si.Completed = 1, si.DateCompleted = CURDATE(), si.HasFailedInspectionTest = 0
-       WHERE pci.ProductionControlID = ? AND pci.ProductionControlAssemblyID = ?
-         AND s.StationID = 6 AND si.InstanceNumber = ?`,
-      [productionControlID, productionControlAssemblyID, instanceNumber]
+      `INSERT IGNORE INTO productioncontrolitemstationsummaryinstancenumbers
+       (ProductionControlItemStationSummaryID, ProductionControlItemID, InstanceNumber, Completed, Hours, DateCompleted, HasFailedInspectionTest)
+       SELECT s.ProductionControlItemStationSummaryID, ?, pin.InstanceNumber, 0, 0, NULL, 0
+       FROM productioncontrolitemstationsummary s
+       JOIN productioncontroliteminstancenumbers pin ON pin.ProductionControlItemID = ?
+       WHERE s.ProductionControlID = ? AND s.ProductionControlItemID = ? AND s.StationID = 6`,
+      [Number(item.ProductionControlItemID), Number(item.ProductionControlItemID), productionControlID, Number(item.ProductionControlItemID)]
+    );
+    for (const instanceNumber of instanceNumbers) {
+      await mysqlConnection.query(
+        `UPDATE productioncontrolitemstationsummaryinstancenumbers si
+         JOIN productioncontrolitemstationsummary s ON s.ProductionControlItemStationSummaryID = si.ProductionControlItemStationSummaryID
+         SET si.Completed = 1, si.DateCompleted = CURDATE(), si.HasFailedInspectionTest = 0
+         WHERE s.ProductionControlID = ? AND s.ProductionControlItemID = ? AND s.StationID = 6 AND si.InstanceNumber = ?`,
+        [productionControlID, Number(item.ProductionControlItemID), instanceNumber]
+      );
+    }
+    await mysqlConnection.query(
+      `UPDATE productioncontrolitemstationsummary s
+       SET s.QuantityCompleted = (SELECT COUNT(*) FROM productioncontrolitemstationsummaryinstancenumbers si WHERE si.ProductionControlItemStationSummaryID = s.ProductionControlItemStationSummaryID AND si.Completed = 1),
+           s.LastDateCompleted = CURDATE(), s.FailedInspectionTestQuantity = 0
+       WHERE s.ProductionControlID = ? AND s.ProductionControlItemID = ? AND s.StationID = 6`,
+      [productionControlID, Number(item.ProductionControlItemID)]
     );
   }
 }
