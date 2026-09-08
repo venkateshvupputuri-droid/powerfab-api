@@ -1235,11 +1235,11 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
   const [stationRows] = await mysqlConnection.query(
     `SELECT ProductionControlItemStationID, Quantity
      FROM productioncontrolitemstations
-     WHERE ProductionControlID = ? AND MainMark = ?
+     WHERE ProductionControlID = ? AND REPLACE(MainMark, CHAR(1), '') = ?
      ORDER BY ProductionControlItemStationID DESC LIMIT 1`,
     [productionControlID, assembly.assemblyMark]
   );
-  const station = (stationRows as Array<Record<string, any>>)[0];
+  let station = (stationRows as Array<Record<string, any>>)[0];
   const [itemRows] = await mysqlConnection.query(
     `SELECT ProductionControlItemID
      FROM productioncontrolitems
@@ -1248,7 +1248,16 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
     [productionControlID, productionControlAssemblyID]
   );
   const item = (itemRows as Array<Record<string, any>>)[0];
-  if (!station || !item) return;
+  if (!item) return;
+  if (!station) {
+    const [stationResult] = await mysqlConnection.query(
+      `INSERT INTO productioncontrolitemstations
+       (ProductionControlID, MainMark, PieceMark, SequenceID, StationID, Quantity, UserID, DateCompleted, TimeCompleted, Hours, BatchID)
+       VALUES (?, ?, ?, 0, 6, ?, 0, CURDATE(), CURTIME(), 0, ?)`,
+      [productionControlID, assembly.assemblyMark, assembly.assemblyMark, Number(assembly.assemblyQuantity || 1), `${assembly.jobNumber}-${assembly.assemblyMark}`]
+    );
+    station = { ProductionControlItemStationID: Number((stationResult as any).insertId), Quantity: Number(assembly.assemblyQuantity || 1) };
+  }
 
   const [subtypeResult] = await mysqlConnection.query(
     `INSERT INTO inspectiontestsubtypes
