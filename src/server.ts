@@ -1172,6 +1172,7 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
     productionControlAssemblyID: assemblyMatch?.productionControlAssemblyID ?? null,
     assemblyQuantity: assemblyMatch?.assemblyQuantity ?? 0,
     assemblyWeightEach: assemblyMatch?.assemblyWeightEach ?? 0,
+    inspectionOptions: await getInspectionOptions(),
     history
   });
 });
@@ -1188,6 +1189,25 @@ async function getAssemblyInstanceNumbers(productionControlID: number, productio
     [productionControlID, productionControlAssemblyID]
   );
   return (rows as Array<Record<string, any>>).map((row) => Number(row.InstanceNumber)).filter((value) => Number.isFinite(value));
+}
+
+async function getInspectionOptions() {
+  const [rows] = await mysqlConnection.query(
+    `SELECT f.InspectionTestFieldID, s.String AS fieldName, os.String AS optionValue
+     FROM inspectiontestfields f
+     JOIN inspectionteststrings s ON s.InspectionTestStringID = f.FieldNameStringID
+     JOIN inspectiontestfieldoptions o ON o.InspectionTestFieldID = f.InspectionTestFieldID
+     JOIN inspectionteststrings os ON os.InspectionTestStringID = o.OptionStringID
+     WHERE f.InspectionTestID = 1
+     ORDER BY f.FieldIndex, o.InspectionTestFieldOptionID`
+  );
+  return (rows as Array<Record<string, any>>).reduce<Record<string, string[]>>((options, row) => {
+    const fieldName = String(row.fieldName || '').trim();
+    if (!fieldName) return options;
+    options[fieldName] ??= [];
+    if (!options[fieldName].includes(String(row.optionValue))) options[fieldName].push(String(row.optionValue));
+    return options;
+  }, {});
 }
 
 async function syncInspectionToPowerFab(assembly: Record<string, any>, inspection: z.infer<typeof fitupInspectionInput>) {

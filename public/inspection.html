@@ -54,9 +54,9 @@
               <label>Location<input id="location"></label>
               <label>Inspector<input id="inspector" required maxlength="255" autocomplete="name"></label>
               <label>Test Hours<input id="test-hours" type="number" min="0" step="any"></label>
-              <label>Dimensions<input id="dimensions"></label>
-              <label>Grade<input id="grade"></label>
-              <label>Welding<input id="welding"></label>
+              <label>Dimensions<select id="dimensions"><option value="">Select option</option></select></label>
+              <label>Grade<select id="grade"><option value="">Select option</option></select></label>
+              <label>Welding<select id="welding"><option value="">Select option</option></select></label>
               <label>Result<select id="result"><option>PASS</option><option>FAIL</option><option>HOLD</option><option>RE-INSPECTION REQUIRED</option></select></label>
             </div>
             <label>Remarks<textarea id="remarks" rows="5" maxlength="4000"></textarea></label>
@@ -99,6 +99,12 @@
         document.getElementById('main-mark').value = payload.assemblyMark || '';
         document.getElementById('available-instances').value = (payload.availableInstanceNumbers || []).join(', ');
         document.getElementById('test-performed').value = new Date().toISOString().slice(0, 16);
+        ['dimensions', 'grade', 'welding'].forEach((fieldName) => {
+          const field = document.getElementById(fieldName);
+          (payload.inspectionOptions?.[fieldName[0].toUpperCase() + fieldName.slice(1)] || []).forEach((option) => {
+            field.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`);
+          });
+        });
         details.classList.remove('hidden');
         form.classList.remove('hidden');
         document.getElementById('inspector').focus();
