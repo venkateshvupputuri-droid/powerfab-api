@@ -11,9 +11,9 @@
     <header class="topbar detail-topbar">
       <div class="topbar-left">
         <button class="menu-button" type="button" aria-label="Open menu">&#9776;</button>
-        <div class="brand" aria-label="Tekla PowerFab Go">
+        <div class="brand" aria-label="Adani Fab & Erection Tracker" title="Adani Fab & Erection Tracker" style="cursor: pointer;">
           <div class="brand-mark" aria-hidden="true"><span class="brand-mark-inner"></span></div>
-          <div class="brand-text"><span class="tekla">Tekla</span><span class="powerfab">PowerFab</span><span class="go">Go</span></div>
+          <div class="brand-text"><span class="tekla">Adani</span><span class="powerfab">Fab &amp; Erection</span><span class="go">Tracker</span></div>
         </div>
       </div>
     </header>
@@ -92,6 +92,15 @@
       saveMessage.textContent = 'This inspection is already saved and locked.';
     }
 
+    function updateQuantityFromInstances() {
+      const instanceNumbers = document.getElementById('instance-number').value
+        .split(',')
+        .map((value) => Number(value.trim()))
+        .filter((value, index, values) => Number.isInteger(value) && value > 0 && values.indexOf(value) === index);
+      document.getElementById('quantity').value = instanceNumbers.length ? String(instanceNumbers.length) : '';
+      return instanceNumbers;
+    }
+
     function renderHistory(inspections) {
       historyList.innerHTML = inspections.map((inspection) => `<article class="inspection-history-item"><strong>${escapeHtml(inspection.result)}</strong><span>${escapeHtml(inspection.inspector)} · ${escapeHtml(inspection.createdAt)}</span><p>${escapeHtml(inspection.remarks || 'No remarks')}</p></article>`).join('');
       historyPanel.classList.remove('hidden');
@@ -134,9 +143,11 @@
             const field = document.getElementById(key === 'instanceNumber' ? 'instance-number' : key);
             if (field && typeof value === 'string') field.value = value;
           });
+          updateQuantityFromInstances();
           if (existing.inspections?.length) {
             renderHistory(existing.inspections);
-            lockInspectionForm();
+            if (existing.inspectionComplete) lockInspectionForm();
+            else saveMessage.textContent = `Inspection progress: ${(existing.completedInstanceNumbers || []).length} of ${(existing.availableInstanceNumbers || []).length} instances completed. You can save the remaining instances.`;
           }
         }
       } catch (error) {
@@ -181,14 +192,20 @@
           return;
         }
         if (!response.ok) throw new Error(payload.error || 'Unable to save inspection.');
-        saveMessage.textContent = `Inspection saved: ${payload.result}`;
-        form.querySelectorAll('input, select, textarea').forEach((field) => { field.disabled = true; });
-        event.submitter.disabled = true;
-        saveMessage.textContent = `Inspection saved: ${payload.result}. This inspection is now locked.`;
+        const progressResponse = await fetch(`/api/assemblies/${encodeURIComponent(qrCode)}/fitup-inspections`);
+        const progress = progressResponse.ok ? await progressResponse.json() : null;
+        if (progress?.inspections) renderHistory(progress.inspections);
+        if (progress?.inspectionComplete) {
+          lockInspectionForm();
+        } else {
+          saveMessage.textContent = `Inspection saved: ${payload.result}. ${(progress?.completedInstanceNumbers || []).length} of ${(progress?.availableInstanceNumbers || []).length} instances completed. Continue with the remaining instances.`;
+        }
       } catch (error) {
         saveMessage.textContent = error.message || 'Unable to save inspection.';
       }
     });
+
+    document.getElementById('instance-number').addEventListener('input', updateQuantityFromInstances);
 
     document.querySelectorAll('.inspection-tab').forEach((tab) => tab.addEventListener('click', () => {
       document.querySelectorAll('.inspection-tab, .inspection-tab-panel').forEach((element) => element.classList.remove('active'));

@@ -56,6 +56,7 @@ const mysqlConnection = (() => {
 
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
+app.get('/mobile', (_request, response) => response.redirect('/scan.html'));
 app.use(express.static('public'));
 
 const statuses = Object.values(FabricationStatus);
@@ -372,7 +373,62 @@ async function syncAssemblyStationToPowerFabTables(options: {
     );
   } catch (error) {
     console.error('Unable to sync assembly stage to real PowerFab tables', error);
+    throw new Error('Unable to write the scan to PowerFab tables.', { cause: error });
   }
+}
+
+async function backfillHistoricalAssemblyScans() {
+  const [rows] = await mysqlConnection.query(
+    `SELECT id, qrCode, jobNumber, assemblyMark, stationId, stationName, routeName, routeOrder, stageName, scannedBy, note
+     FROM assembly_scan_history
+     ORDER BY createdAt ASC, id ASC`
+  );
+  let synced = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const row of rows as Array<Record<string, any>>) {
+    const jobNumber = String(row.jobNumber ?? '').trim();
+    const assemblyMark = String(row.assemblyMark ?? '').replace(/\u0001/g, '').trim();
+    const stationId = Number(row.stationId ?? 0);
+    if (!jobNumber || !assemblyMark || !stationId) {
+      failed += 1;
+      console.error(`Skipping historical scan ${row.id}: missing job, assembly, or station data.`);
+      continue;
+    }
+
+    const batchId = `${jobNumber}-${assemblyMark}`;
+    const [existingRows] = await mysqlConnection.query(
+      `SELECT 1 FROM productioncontrolitemstations WHERE BatchID = ? AND StationID = ? LIMIT 1`,
+      [batchId, stationId]
+    );
+    if ((existingRows as Array<Record<string, any>>).length > 0) {
+      skipped += 1;
+      continue;
+    }
+
+    try {
+      await syncAssemblyStationToPowerFabTables({
+        qrCode: String(row.qrCode),
+        jobNumber,
+        assemblyMark,
+        stage: String(row.stageName),
+        stationId,
+        stationName: String(row.stationName ?? ''),
+        routeName: String(row.routeName ?? ''),
+        routeOrder: Number(row.routeOrder ?? 0),
+        scannedBy: String(row.scannedBy ?? 'historical-backfill'),
+        note: String(row.note ?? 'Historical scan backfill'),
+        batchId
+      });
+      synced += 1;
+    } catch (error) {
+      failed += 1;
+      console.error(`Unable to backfill historical scan ${row.id}`, error);
+    }
+  }
+
+  console.log(`Historical scan backfill complete: ${synced} synced, ${skipped} already present, ${failed} failed.`);
 }
 
 async function getStationsFromDatabase() {
@@ -805,14 +861,18 @@ app.get('/api/project-detail', async (request, response) => {
       const qty = Number(row.AssemblyQuantity ?? 0);
       const weight = Number(row.AssemblyWeightEach ?? 0);
 
+      const assemblyWeightEach = Number(row.AssemblyWeightEach ?? 0);
+      const assemblyWeight = Number((assemblyWeightEach * qty).toFixed(3));
+
       return {
         productionControlAssemblyId,
         mainMark: cleanPowerFabValue(row.MainMark ?? '—'),
         drawingNumber: cleanPowerFabValue(row.MainMark ?? '—'),
         assemblyQuantity: qty,
         totalQty: qty,
-        weight,
-        assemblyWeightEach: weight,
+        weight: assemblyWeight,
+        assemblyWeightEach,
+        assemblyWeightTotal: assemblyWeight,
         grossAssemblyWeightEach: Number(row.GrossAssemblyWeightEach ?? 0),
         assemblyLengthEach: Number(row.AssemblyLengthEach ?? 0),
         assemblySquareMetersEach: Number(row.AssemblySquareMetersEach ?? 0),
@@ -893,24 +953,65 @@ app.get('/api/project-drawings', async (request, response) => {
         d.ApprovalStatusID,
         COALESCE(aps.Description, '—') AS approvalStatus,
         COALESCE(dr.Revision, '—') AS revision,
-        COALESCE((SELECT SUM(pca.AssemblyQuantity)
+        COALESCE((SELECT MAX(pca.AssemblyQuantity)
           FROM productioncontrolitems pci
           JOIN productioncontrolassemblies pca ON pca.ProductionControlAssemblyID = pci.ProductionControlAssemblyID
-          WHERE pci.DrawingID = d.DrawingID AND pci.ProductionControlID = ?), 0) AS assemblyQuantity,
-        COALESCE((SELECT SUM(pci.Weight * pci.Quantity)
+          WHERE pci.DrawingID = d.DrawingID
+            AND pci.ProductionControlID = ?
+            AND NOT (
+              LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%nutm%'
+              OR LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%boltm%'
+              OR LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%washerm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%nutm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%boltm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%washerm%'
+            )), 0) AS assemblyQuantity,
+        COALESCE((SELECT MAX(pca.AssemblyWeightEach)
           FROM productioncontrolitems pci
-          WHERE pci.DrawingID = d.DrawingID AND pci.ProductionControlID = ?), 0) AS weight,
+          JOIN productioncontrolassemblies pca ON pca.ProductionControlAssemblyID = pci.ProductionControlAssemblyID
+          WHERE pci.DrawingID = d.DrawingID
+            AND pci.ProductionControlID = ?
+            AND NOT (
+              LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%nutm%'
+              OR LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%boltm%'
+              OR LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%washerm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%nutm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%boltm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%washerm%'
+            )), 0) AS assemblyWeightEach,
+        COALESCE((SELECT MAX(pca.AssemblyWeightEach * pca.AssemblyQuantity)
+          FROM productioncontrolitems pci
+          JOIN productioncontrolassemblies pca ON pca.ProductionControlAssemblyID = pci.ProductionControlAssemblyID
+          WHERE pci.DrawingID = d.DrawingID
+            AND pci.ProductionControlID = ?
+            AND NOT (
+              LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%nutm%'
+              OR LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%boltm%'
+              OR LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%washerm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%nutm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%boltm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%washerm%'
+            )), 0) AS weight,
         COALESCE((SELECT MIN(pcs.SequenceID)
           FROM productioncontrolitems pci
           JOIN productioncontrolsequences pcs ON pcs.ProductionControlID = pci.ProductionControlID
-          WHERE pci.DrawingID = d.DrawingID AND pci.ProductionControlID = ?), '—') AS sequence
+          WHERE pci.DrawingID = d.DrawingID
+            AND pci.ProductionControlID = ?
+            AND NOT (
+              LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%nutm%'
+              OR LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%boltm%'
+              OR LOWER(REPLACE(COALESCE(pci.MainMark, ''), CHAR(1), '')) LIKE '%washerm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%nutm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%boltm%'
+              OR LOWER(REPLACE(COALESCE(pci.PieceMark, ''), CHAR(1), '')) LIKE '%washerm%'
+            )), '—') AS sequence
       FROM drawings d
       LEFT JOIN drawingrevisions dr ON dr.DrawingRevisionID = d.LatestDrawingRevisionID
       LEFT JOIN approvalstatuses aps ON aps.ApprovalStatusID = d.ApprovalStatusID
       WHERE d.ProjectID = ?
       ORDER BY d.DrawingNumber
       LIMIT 2000`,
-      [productionControlId, productionControlId, productionControlId, Number(project.ProjectID)]
+      [productionControlId, productionControlId, productionControlId, productionControlId, Number(project.ProjectID)]
     );
 
     response.json({
@@ -923,6 +1024,8 @@ app.get('/api/project-drawings', async (request, response) => {
         description: cleanPowerFabValue(drawing.Description),
         approvalStatus: cleanPowerFabValue(drawing.approvalStatus),
         assemblyQuantity: Number(drawing.assemblyQuantity ?? 0),
+        assemblyWeightEach: Number(drawing.assemblyWeightEach ?? 0),
+        assemblyWeight: Number(drawing.weight ?? 0),
         weight: Number(drawing.weight ?? 0),
         sequence: drawing.sequence ?? '—'
       }))
@@ -1490,28 +1593,37 @@ app.post('/api/assemblies/:qrCode/status', async (request, response) => {
     ]
   );
 
-  await syncAssemblyStationToPowerFabTables({
-    qrCode,
-    jobNumber: resolvedJobNumber,
-    assemblyMark: resolvedAssemblyMark,
-    productionControlID: assemblyMatch?.productionControlID,
-    productionControlAssemblyID: assemblyMatch?.productionControlAssemblyID,
-    stage,
-    stationId: station ? Number(station.StationID ?? 0) : null,
-    stationName: resolvedStationName,
-    routeName: resolvedRouteName,
-    routeOrder: route ? Number(route.routeOrder ?? 0) : Number(request.body?.routeOrder ?? 0),
-    scannedBy: String(request.body?.scannedBy ?? 'mobile-app'),
-    note: String(request.body?.note ?? `${stage} scan completed`),
-    assemblyQuantity: assemblyMatch?.assemblyQuantity,
-    assemblyWeightEach: assemblyMatch?.assemblyWeightEach,
-    grossAssemblyWeightEach: assemblyMatch?.grossAssemblyWeightEach,
-    assemblyLengthEach: assemblyMatch?.assemblyLengthEach,
-    assemblySquareMetersEach: assemblyMatch?.assemblySquareMetersEach,
-    assemblySurfaceAreaEach: assemblyMatch?.assemblySurfaceAreaEach,
-    hours: Number(stationData.hours ?? 0),
-    batchId: stationData.batchId ?? undefined
-  });
+  try {
+    await syncAssemblyStationToPowerFabTables({
+      qrCode,
+      jobNumber: resolvedJobNumber,
+      assemblyMark: resolvedAssemblyMark,
+      productionControlID: assemblyMatch?.productionControlID,
+      productionControlAssemblyID: assemblyMatch?.productionControlAssemblyID,
+      stage,
+      stationId: station ? Number(station.StationID ?? 0) : null,
+      stationName: resolvedStationName,
+      routeName: resolvedRouteName,
+      routeOrder: route ? Number(route.routeOrder ?? 0) : Number(request.body?.routeOrder ?? 0),
+      scannedBy: String(request.body?.scannedBy ?? 'mobile-app'),
+      note: String(request.body?.note ?? `${stage} scan completed`),
+      assemblyQuantity: assemblyMatch?.assemblyQuantity,
+      assemblyWeightEach: assemblyMatch?.assemblyWeightEach,
+      grossAssemblyWeightEach: assemblyMatch?.grossAssemblyWeightEach,
+      assemblyLengthEach: assemblyMatch?.assemblyLengthEach,
+      assemblySquareMetersEach: assemblyMatch?.assemblySquareMetersEach,
+      assemblySurfaceAreaEach: assemblyMatch?.assemblySurfaceAreaEach,
+      hours: Number(stationData.hours ?? 0),
+      batchId: stationData.batchId ?? undefined
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown PowerFab sync error';
+    return response.status(502).json({
+      error: `Scan was saved in the portal but could not be written to PowerFab: ${message}`,
+      saved: false,
+      portalSaved: true
+    });
+  }
 
   const history = await mysqlConnection.query(
     'SELECT * FROM `assembly_scan_history` WHERE `qrCode` = ? ORDER BY `createdAt` ASC',
@@ -1561,9 +1673,32 @@ app.get('/api/assemblies/:qrCode/fitup-inspections', async (request, response) =
   const qrCode = String(request.params.qrCode || '').trim();
   const contractorId = getContractorId(request);
   if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
-  if (!(await contractorCanAccessQr(contractorId, qrCode))) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
+  const assembly = await contractorCanAccessQr(contractorId, qrCode);
+  if (!assembly) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
   const [rows] = await mysqlConnection.query('SELECT id, result, inspector, remarks, checks, createdAt FROM contractor_fitup_inspections WHERE qrCode = ? ORDER BY createdAt DESC', [qrCode]);
-  response.json({ inspections: rows });
+  const availableInstanceNumbers = await getAssemblyInstanceNumbers(assembly.productionControlID, assembly.productionControlAssemblyID);
+  const completedInstanceNumbers = new Set<number>();
+  const inspections = (rows as Array<Record<string, any>>).map((row) => {
+    let checks: Record<string, unknown> = {};
+    try {
+      checks = typeof row.checks === 'string' ? JSON.parse(row.checks) : (row.checks ?? {});
+    } catch {
+      checks = {};
+    }
+    String(checks.instanceNumber ?? '')
+      .split(',')
+      .map((value) => Number(value.trim()))
+      .filter((value, index, values) => Number.isInteger(value) && value > 0 && values.indexOf(value) === index)
+      .forEach((value) => completedInstanceNumbers.add(value));
+    return { ...row, checks };
+  });
+  const completed = [...completedInstanceNumbers].filter((value) => availableInstanceNumbers.includes(value));
+  response.json({
+    inspections,
+    availableInstanceNumbers,
+    completedInstanceNumbers: completed,
+    inspectionComplete: availableInstanceNumbers.length > 0 && availableInstanceNumbers.every((value) => completedInstanceNumbers.has(value))
+  });
 });
 
 app.get('/api/instances', async (request, response, next) => {
@@ -1661,6 +1796,10 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
 });
 
 ensureAssemblyScanTables().catch((error) => console.error('Unable to initialize assembly_scan_history tables', error));
+
+if (process.env.BACKFILL_EXISTING_SCANS === 'true') {
+  backfillHistoricalAssemblyScans().catch((error) => console.error('Unable to backfill historical assembly scans', error));
+}
 
 const server = app.listen(port, '0.0.0.0', () => console.log(`PowerFab API listening on ${publicAppUrl}`));
 

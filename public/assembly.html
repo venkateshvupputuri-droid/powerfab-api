@@ -11,18 +11,23 @@
     <header class="topbar detail-topbar">
       <div class="topbar-left">
         <button class="menu-button" type="button" aria-label="Open menu">☰</button>
-        <div class="brand" aria-label="Tekla PowerFab Go">
+        <div class="brand" aria-label="Adani Fab & Erection Tracker" title="Adani Fab & Erection Tracker" style="cursor: pointer;">
           <div class="brand-mark" aria-hidden="true">
             <span class="brand-mark-inner"></span>
           </div>
           <div class="brand-text">
-            <span class="tekla">Tekla</span>
-            <span class="powerfab">PowerFab</span>
-            <span class="go">Go</span>
+            <span class="tekla">Adani</span>
+            <span class="powerfab">Fab &amp; Erection</span>
+            <span class="go">Tracker</span>
           </div>
         </div>
       </div>
-      <button class="user-button" type="button" aria-label="User profile">◔</button>
+      <div class="user-menu-wrap">
+        <button class="user-button" type="button" aria-label="User profile" aria-expanded="false">◔</button>
+        <div class="user-menu hidden" role="menu" aria-label="User menu">
+          <button type="button" class="user-menu-item logout-menu-item">Logout</button>
+        </div>
+      </div>
     </header>
 
     <nav class="project-nav" aria-label="Project sections">
@@ -54,7 +59,8 @@
               <th>Main Mark</th>
               <th>Drawing No</th>
               <th>Assy Qty</th>
-              <th>Weight</th>
+              <th>Assembly Weight Each</th>
+              <th>Assembly Weight</th>
               <th>Current Stage</th>
               <th>QR</th>
               <th>Print</th>
@@ -156,11 +162,17 @@
 
         title.textContent = `${project.jobNumber || jobNumber} Assemblies`;
         document.getElementById('drawings-nav').addEventListener('click', () => {
-          window.open(`/drawings.html?job=${encodeURIComponent(jobNumber)}`, '_blank', 'noopener,noreferrer');
+          window.location.href = `/drawings.html?job=${encodeURIComponent(jobNumber)}`;
         });
         document.getElementById('inspections-nav').addEventListener('click', () => {
-          window.open(`/inspections.html?job=${encodeURIComponent(jobNumber)}`, '_blank', 'noopener,noreferrer');
+          window.location.href = `/inspections.html?job=${encodeURIComponent(jobNumber)}`;
         });
+        const brand = document.querySelector('.brand');
+        if (brand) {
+          brand.addEventListener('click', () => {
+            window.location.href = `/project.html?job=${encodeURIComponent(jobNumber)}`;
+          });
+        }
         meta.innerHTML = [
           project.plant ? `Plant: ${project.plant}` : null,
           project.unit ? `Unit: ${project.unit}` : null,
@@ -189,14 +201,16 @@
             const qrCode = item.qrCode || 'assembly';
             const stage = item.fabricationStage || 'Fitup';
             const qty = Number(item.assemblyQuantity ?? 0);
-            const weight = Number(item.weight ?? item.assemblyWeightEach ?? 0);
+            const assemblyWeightEach = Number(item.assemblyWeightEach ?? item.weight ?? item.assemblyWeightTotal ?? 0);
+            const assemblyWeight = Number(item.assemblyWeight ?? item.assemblyWeightTotal ?? (assemblyWeightEach * qty));
 
             return `
               <tr>
                 <td><strong>${item.mainMark || '—'}</strong></td>
                 <td>${item.drawingNumber || item.mainMark || '—'}</td>
                 <td>${qty}</td>
-                <td>${formatWeight(weight)}</td>
+                <td>${formatWeight(assemblyWeightEach)}</td>
+                <td>${formatWeight(assemblyWeight)}</td>
                 <td>
                   <select class="stage-select" data-qr="${qrCode}">
                     ${fabricationStages.map((option) => `<option value="${option}" ${option === stage ? 'selected' : ''}>${option}</option>`).join('')}
@@ -253,6 +267,49 @@
         meta.textContent = 'Unable to load live assembly data from PowerFab.';
       }
     }
+
+    document.querySelectorAll('.user-menu-wrap').forEach((menuWrap) => {
+      const button = menuWrap.querySelector('.user-button');
+      const menu = menuWrap.querySelector('.user-menu');
+      const logoutButton = menuWrap.querySelector('.logout-menu-item');
+
+      fetch('/api/auth/me')
+        .then(async (response) => {
+          if (!response.ok) throw new Error('Not authenticated');
+          const payload = await response.json();
+          const displayName = payload.contractor?.contractorName || payload.contractor?.username || 'User';
+          button.textContent = displayName;
+          button.setAttribute('aria-label', `User profile: ${displayName}`);
+        })
+        .catch(() => {
+          window.location.href = '/';
+        });
+
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const isHidden = menu.classList.toggle('hidden');
+        button.setAttribute('aria-expanded', String(!isHidden));
+        document.querySelectorAll('.user-menu').forEach((otherMenu) => {
+          if (otherMenu !== menu) otherMenu.classList.add('hidden');
+        });
+      });
+
+      logoutButton.addEventListener('click', async () => {
+        try {
+          await fetch('/api/auth/logout', { method: 'POST' });
+        } finally {
+          window.location.href = '/';
+        }
+      });
+    });
+
+    document.addEventListener('click', (event) => {
+      document.querySelectorAll('.user-menu').forEach((menu) => {
+        if (!menu.closest('.user-menu-wrap')?.contains(event.target)) {
+          menu.classList.add('hidden');
+        }
+      });
+    });
 
     loadAssemblyData();
   </script>

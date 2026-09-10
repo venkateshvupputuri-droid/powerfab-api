@@ -29,7 +29,9 @@ The bootstrap account is created in MySQL on startup. Contractors sign in throug
 
 ## Deploy to Render
 
-The repository includes `render.yaml`. In Render, choose **New > Blueprint**, connect the GitHub repository, and apply the blueprint. It creates a web service with a persistent 1 GB disk for SQLite. After deployment, use the generated service URL as the live API URL.
+The repository includes `render.yaml`. In Render, choose **New > Blueprint**, connect the GitHub repository, and apply the blueprint. The service uses the existing MySQL/PowerFab database, so set `DATABASE_URL` to the reachable production MySQL connection string and add the contractor bootstrap variables before the first deploy. After deployment, use the generated service URL as the live API and mobile web app URL.
+
+The mobile workflow is served by the same responsive web app. Use the permanent mobile entry path `/mobile` (it redirects to `/scan.html`) from a phone browser over mobile data; it does not require a separate mobile server.
 
 To publish this repository to GitHub from PowerShell after creating `venkateshvupputuri-droid/powerfab-api`:
 

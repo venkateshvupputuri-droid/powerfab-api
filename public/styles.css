@@ -393,12 +393,49 @@ body.detail-page {
   gap: 16px;
 }
 
+.user-menu-wrap {
+  position: relative;
+}
+
 .menu-button, .user-button {
   border: 0;
   background: transparent;
   color: var(--white);
   font-size: 2.5rem;
   line-height: 1;
+  cursor: pointer;
+}
+
+.user-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  min-width: 180px;
+  background: #ffffff;
+  border: 1px solid rgba(20, 20, 20, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+  z-index: 20;
+}
+
+.user-menu.hidden {
+  display: none;
+}
+
+.user-menu-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 12px 16px;
+  text-align: left;
+  font-size: 1rem;
+  color: #18354b;
+  cursor: pointer;
+}
+
+.user-menu-item:hover {
+  background: rgba(20, 93, 146, 0.06);
 }
 
 .brand {

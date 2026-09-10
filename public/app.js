@@ -50,10 +50,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  logoutButton.addEventListener('click', async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    window.location.reload();
-  });
+  if (logoutButton) {
+    logoutButton.addEventListener('click', async () => {
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } finally {
+        window.location.href = '/';
+      }
+    });
+  }
 
   function syncSelectOptions(source, target) {
     const values = [...new Set(source.map((item) => item).filter(Boolean))].sort();
@@ -92,8 +97,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderProjects();
 
         if (jobNumber) {
-          const targetUrl = `/project.html?job=${encodeURIComponent(jobNumber)}`;
-          window.open(targetUrl, '_blank', 'noopener,noreferrer');
+          window.location.href = `/project.html?job=${encodeURIComponent(jobNumber)}`;
         }
       });
     });

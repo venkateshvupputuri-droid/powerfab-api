@@ -11,12 +11,17 @@
     <header class="topbar detail-topbar">
       <div class="topbar-left">
         <button class="menu-button" type="button" aria-label="Open menu">☰</button>
-        <div class="brand" aria-label="Tekla PowerFab Go">
+        <div class="brand" aria-label="Adani Fab & Erection Tracker" title="Adani Fab & Erection Tracker" style="cursor: pointer;">
           <div class="brand-mark" aria-hidden="true"><span class="brand-mark-inner"></span></div>
-          <div class="brand-text"><span class="tekla">Tekla</span><span class="powerfab">PowerFab</span><span class="go">Go</span></div>
+          <div class="brand-text"><span class="tekla">Adani</span><span class="powerfab">Fab &amp; Erection</span><span class="go">Tracker</span></div>
         </div>
       </div>
-      <button class="user-button" type="button" aria-label="User profile">◔</button>
+      <div class="user-menu-wrap">
+        <button class="user-button" type="button" aria-label="User profile" aria-expanded="false">◔</button>
+        <div class="user-menu hidden" role="menu" aria-label="User menu">
+          <button type="button" class="user-menu-item logout-menu-item">Logout</button>
+        </div>
+      </div>
     </header>
 
     <nav class="project-nav" aria-label="Project sections">
@@ -29,12 +34,17 @@
       <h1 id="drawings-title" class="project-title">Loading drawings...</h1>
       <div class="drawings-toolbar">
         <strong>All drawings</strong>
-        <input id="drawing-search" type="search" placeholder="Drawing #" aria-label="Search drawings">
+        <label for="description-filter">Description</label>
+        <select id="description-filter" aria-label="Filter by description">
+          <option value="">All descriptions</option>
+        </select>
+        <label for="drawing-search">Drawing No</label>
+        <input id="drawing-search" type="search" placeholder="Drawing No" aria-label="Filter by drawing number">
       </div>
       <div class="drawings-table-wrap">
         <table class="drawings-table">
-          <thead><tr><th>PDF</th><th>Dwg #</th><th>Dwg log</th><th>Rev. #</th><th>Description</th><th>Appr. status</th><th>Assy qty</th><th>Weight</th><th>Sequence</th></tr></thead>
-          <tbody id="drawing-rows"><tr><td colspan="9">Loading drawings...</td></tr></tbody>
+          <thead><tr><th>PDF</th><th>Dwg #</th><th>Dwg log</th><th>Rev. #</th><th>Description</th><th>Appr. status</th><th>Assy qty</th><th>Assembly Weight Each</th><th>Assembly Weight</th><th>Sequence</th></tr></thead>
+          <tbody id="drawing-rows"><tr><td colspan="10">Loading drawings...</td></tr></tbody>
         </table>
       </div>
     </main>
@@ -46,16 +56,30 @@
     const title = document.getElementById('drawings-title');
     const rows = document.getElementById('drawing-rows');
     const search = document.getElementById('drawing-search');
+    const descriptionFilter = document.getElementById('description-filter');
     let drawings = [];
 
     function escapeHtml(value) {
       return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
+    function formatWeight(value) {
+      const amount = Number(value ?? 0);
+      return `${amount.toLocaleString(undefined, { maximumFractionDigits: 2 })} kg`;
+    }
+
     function render() {
-      const query = search.value.trim().toLowerCase();
-      const filtered = drawings.filter((drawing) => (!drawingId || String(drawing.drawingId) === drawingId) && `${drawing.drawingNumber} ${drawing.description}`.toLowerCase().includes(query));
-      rows.innerHTML = filtered.length ? filtered.map((drawing) => `
+      const drawingQuery = search.value.trim().toLowerCase();
+      const selectedDescription = descriptionFilter.value;
+      const filtered = drawings.filter((drawing) => {
+        const matchesDrawingNumber = String(drawing.drawingNumber ?? '').toLowerCase().includes(drawingQuery);
+        const matchesDescription = !selectedDescription || String(drawing.description ?? '') === selectedDescription;
+        return (!drawingId || String(drawing.drawingId) === drawingId) && matchesDrawingNumber && matchesDescription;
+      });
+      rows.innerHTML = filtered.length ? filtered.map((drawing) => {
+        const assemblyWeightEach = Number (drawing.assemblyWeightEach ?? drawing.weight ?? 0);
+        const assemblyWeight = Number(drawing.assemblyWeight ?? drawing.weight ?? 0);
+        return `
         <tr>
           <td><a class="drawing-pdf" href="/api/drawings/${drawing.drawingId}/pdf" target="_blank" rel="noopener">PDF</a></td>
           <td><strong>${escapeHtml(drawing.drawingNumber)}</strong></td>
@@ -64,14 +88,60 @@
           <td>${escapeHtml(drawing.description)}</td>
           <td>${escapeHtml(drawing.approvalStatus)}</td>
           <td>${drawing.assemblyQuantity}</td>
-          <td>${Number(drawing.weight || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} kg</td>
+          <td>${formatWeight(assemblyWeightEach)}</td>
+          <td>${formatWeight(assemblyWeight)}</td>
           <td>${escapeHtml(drawing.sequence)}</td>
-        </tr>`).join('') : '<tr><td colspan="9">No drawings found.</td></tr>';
+        </tr>`;
+      }).join('') : '<tr><td colspan="10">No drawings found.</td></tr>';
     }
 
     document.getElementById('overview-nav').addEventListener('click', () => { window.location.href = `/project.html?job=${encodeURIComponent(jobNumber)}`; });
     document.getElementById('assemblies-nav').addEventListener('click', () => { window.location.href = `/assembly.html?job=${encodeURIComponent(jobNumber)}`; });
+    document.querySelector('.brand').addEventListener('click', () => { window.location.href = `/project.html?job=${encodeURIComponent(jobNumber)}`; });
     search.addEventListener('input', render);
+    descriptionFilter.addEventListener('change', render);
+    document.querySelectorAll('.user-menu-wrap').forEach((menuWrap) => {
+      const button = menuWrap.querySelector('.user-button');
+      const menu = menuWrap.querySelector('.user-menu');
+      const logoutButton = menuWrap.querySelector('.logout-menu-item');
+
+      fetch('/api/auth/me')
+        .then(async (response) => {
+          if (!response.ok) throw new Error('Not authenticated');
+          const payload = await response.json();
+          const displayName = payload.contractor?.contractorName || payload.contractor?.username || 'User';
+          button.textContent = displayName;
+          button.setAttribute('aria-label', `User profile: ${displayName}`);
+        })
+        .catch(() => {
+          window.location.href = '/';
+        });
+
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const isHidden = menu.classList.toggle('hidden');
+        button.setAttribute('aria-expanded', String(!isHidden));
+        document.querySelectorAll('.user-menu').forEach((otherMenu) => {
+          if (otherMenu !== menu) otherMenu.classList.add('hidden');
+        });
+      });
+
+      logoutButton.addEventListener('click', async () => {
+        try {
+          await fetch('/api/auth/logout', { method: 'POST' });
+        } finally {
+          window.location.href = '/';
+        }
+      });
+    });
+
+    document.addEventListener('click', (event) => {
+      document.querySelectorAll('.user-menu').forEach((menu) => {
+        if (!menu.closest('.user-menu-wrap')?.contains(event.target)) {
+          menu.classList.add('hidden');
+        }
+      });
+    });
 
     if (!jobNumber) {
       title.textContent = 'Drawings';
@@ -79,7 +149,13 @@
     } else {
       fetch(`/api/project-drawings?job=${encodeURIComponent(jobNumber)}`)
         .then(async (response) => { const payload = await response.json(); if (!response.ok) throw new Error(payload.error || 'Unable to load drawings'); return payload; })
-        .then((payload) => { drawings = payload.drawings || []; title.textContent = drawingId ? `${payload.jobNumber} Drawing` : `${payload.jobNumber} Drawings (${drawings.length})`; render(); })
+        .then((payload) => {
+          drawings = payload.drawings || [];
+          const descriptions = [...new Set(drawings.map((drawing) => String(drawing.description ?? '').trim()).filter(Boolean))].sort((first, second) => first.localeCompare(second));
+          descriptionFilter.innerHTML = '<option value="">All descriptions</option>' + descriptions.map((description) => `<option value="${escapeHtml(description)}">${escapeHtml(description)}</option>`).join('');
+          title.textContent = drawingId ? `${payload.jobNumber} Drawing` : `${payload.jobNumber} Drawings (${drawings.length})`;
+          render();
+        })
         .catch((error) => { title.textContent = `${jobNumber} Drawings`; rows.innerHTML = `<tr><td colspan="9">${escapeHtml(error.message)}</td></tr>`; });
     }
   </script>

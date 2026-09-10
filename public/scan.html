@@ -11,12 +11,12 @@
     <header class="topbar detail-topbar">
       <div class="topbar-left">
         <button class="menu-button" type="button" aria-label="Open menu">☰</button>
-        <div class="brand" aria-label="Tekla PowerFab Go">
+        <div class="brand" aria-label="Adani Fab & Erection Tracker" title="Adani Fab & Erection Tracker" style="cursor: pointer;">
           <div class="brand-mark" aria-hidden="true"><span class="brand-mark-inner"></span></div>
           <div class="brand-text">
-            <span class="tekla">Tekla</span>
-            <span class="powerfab">PowerFab</span>
-            <span class="go">Go</span>
+            <span class="tekla">Adani</span>
+            <span class="powerfab">Fab &amp; Erection</span>
+            <span class="go">Tracker</span>
           </div>
         </div>
       </div>
@@ -219,12 +219,30 @@
       }
     });
 
-    if (qrFromUrl) {
-      qrInput.value = qrFromUrl;
-      loadAssemblyByQr();
-    } else if (jobNumber) {
-      qrInput.focus();
+    async function requireLogin() {
+      try {
+        const response = await fetch('/api/auth/me');
+        if (!response.ok) {
+          const returnPath = `${window.location.pathname}${window.location.search}`;
+          window.location.href = `/?return=${encodeURIComponent(returnPath)}`;
+          return false;
+        }
+        return true;
+      } catch {
+        window.location.href = `/?return=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        return false;
+      }
     }
+
+    requireLogin().then((loggedIn) => {
+      if (!loggedIn) return;
+      if (qrFromUrl) {
+        qrInput.value = qrFromUrl;
+        loadAssemblyByQr();
+      } else if (jobNumber) {
+        qrInput.focus();
+      }
+    });
   </script>
 </body>
 </html>

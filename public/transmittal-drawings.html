@@ -15,6 +15,12 @@
       <h1 id="page-title" class="project-title">Loading assigned drawings...</h1>
       <div class="drawings-toolbar assigned-drawings-toolbar">
         <strong>Assigned drawings</strong>
+        <label for="description-filter">Description</label>
+        <select id="description-filter" aria-label="Filter by description">
+          <option value="">All descriptions</option>
+        </select>
+        <label for="drawing-search">Drawing No</label>
+        <input id="drawing-search" type="search" placeholder="Drawing No" aria-label="Filter by drawing number">
         <div class="drawing-actions">
           <button type="button" class="detail-button compact-button" id="select-all">Select all</button>
           <button type="button" class="detail-button compact-button" id="print-all">Print all preview</button>
@@ -35,12 +41,21 @@
     const transmittalId = params.get('transmittal') || '';
     const title = document.getElementById('page-title');
     const rows = document.getElementById('drawing-rows');
+    const search = document.getElementById('drawing-search');
+    const descriptionFilter = document.getElementById('description-filter');
     let drawings = [];
 
     const escapeHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
     function render() {
-      rows.innerHTML = drawings.length ? drawings.map((drawing) => `
+      const drawingQuery = search.value.trim().toLowerCase();
+      const selectedDescription = descriptionFilter.value;
+      const filtered = drawings.filter((drawing) => {
+        const matchesDrawingNumber = String(drawing.drawingNumber ?? '').toLowerCase().includes(drawingQuery);
+        const matchesDescription = !selectedDescription || String(drawing.description ?? '') === selectedDescription;
+        return matchesDrawingNumber && matchesDescription;
+      });
+      rows.innerHTML = filtered.length ? filtered.map((drawing) => `
         <tr data-drawing-id="${drawing.drawingId}">
           <td><input class="drawing-check" type="checkbox" aria-label="Select ${escapeHtml(drawing.drawingNumber)}"></td>
           <td><img class="drawing-qr" src="${drawing.qrUrl}" alt="Assembly QR code for ${escapeHtml(drawing.drawingNumber)}"></td>
@@ -92,6 +107,8 @@
     }
 
     document.getElementById('back-nav').onclick = () => { window.location.href = `/transmittals.html?job=${encodeURIComponent(jobNumber)}`; };
+    search.addEventListener('input', render);
+    descriptionFilter.addEventListener('change', render);
     document.getElementById('select-all').onclick = () => { const checks = [...document.querySelectorAll('.drawing-check')]; const shouldSelect = checks.some((check) => !check.checked); checks.forEach((check) => { check.checked = shouldSelect; }); };
     document.getElementById('print-all').onclick = () => printDrawings(drawings);
     document.getElementById('print-selected').onclick = () => printDrawings(selectedDrawings());
@@ -102,7 +119,13 @@
     } else {
       fetch(`/api/transmittal-drawings?job=${encodeURIComponent(jobNumber)}&transmittal=${encodeURIComponent(transmittalId)}`)
         .then(async (response) => { const payload = await response.json(); if (!response.ok) throw new Error(payload.error || 'Unable to load assigned drawings'); return payload; })
-        .then((payload) => { drawings = payload.drawings || []; title.textContent = `${payload.jobNumber} Assigned Drawings (${drawings.length})`; render(); })
+        .then((payload) => {
+          drawings = payload.drawings || [];
+          const descriptions = [...new Set(drawings.map((drawing) => String(drawing.description ?? '').trim()).filter(Boolean))].sort((first, second) => first.localeCompare(second));
+          descriptionFilter.innerHTML = '<option value="">All descriptions</option>' + descriptions.map((description) => `<option value="${escapeHtml(description)}">${escapeHtml(description)}</option>`).join('');
+          title.textContent = `${payload.jobNumber} Assigned Drawings (${drawings.length})`;
+          render();
+        })
         .catch((error) => { title.textContent = `${jobNumber} Assigned Drawings`; rows.innerHTML = `<tr><td colspan="7">${escapeHtml(error.message)}</td></tr>`; });
     }
   </script>
