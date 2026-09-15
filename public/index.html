@@ -11,18 +11,16 @@
     <header class="topbar">
       <div class="topbar-left">
         <button class="menu-button" type="button" aria-label="Open menu">☰</button>
-        <div class="brand" aria-label="Adani Fab & Erection Tracker" title="Adani Fab & Erection Tracker">
-          <div class="brand-mark" aria-hidden="true">
-            <span class="brand-mark-inner"></span>
-          </div>
-          <div class="brand-text">
-            <span class="tekla">Adani</span>
-            <span class="powerfab">Fab &amp; Erection</span>
-            <span class="go">Tracker</span>
-          </div>
+        <div class="brand" aria-label="Adani" title="Adani">
+          <img class="adani-logo" src="/Adani_logo.png" alt="Adani">
         </div>
       </div>
-      <button class="user-button" type="button" aria-label="User profile">◔</button>
+      <div class="user-menu-wrap">
+        <button class="user-button" type="button" aria-label="User profile" aria-expanded="false">◔</button>
+        <div class="user-menu hidden" role="menu" aria-label="User menu">
+          <button type="button" class="user-menu-item logout-menu-item">Logout</button>
+        </div>
+      </div>
     </header>
 
     <main class="content-panel">
@@ -38,7 +36,7 @@
         <div id="contractor-session" class="contractor-session hidden">
           <strong id="contractor-name"></strong>
         </div>
-        <button id="projects-open" class="primary-action" type="button">
+        <button id="projects-open" class="primary-action hidden" type="button">
           Projects
         </button>
 

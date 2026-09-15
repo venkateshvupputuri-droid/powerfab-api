@@ -8,6 +8,19 @@
 </head>
 <body class="detail-page">
   <div class="page-shell project-shell">
+    <header class="topbar detail-topbar">
+      <div class="topbar-left">
+        <button class="menu-button" type="button" aria-label="Open menu">☰</button>
+        <div class="brand" aria-label="Adani Fab & Erection Tracker" title="Adani Fab & Erection Tracker" style="cursor:pointer">
+          <div class="brand-mark" aria-hidden="true"><span class="brand-mark-inner"></span></div>
+          <div class="brand-text"><span class="tekla">Adani</span><span class="powerfab">Fab &amp; Erection</span><span class="go">Tracker</span></div>
+        </div>
+      </div>
+      <div class="user-menu-wrap">
+        <button class="user-button" type="button" aria-label="User profile" aria-expanded="false">◔</button>
+        <div class="user-menu hidden" role="menu" aria-label="User menu"><button type="button" class="user-menu-item logout-menu-item">Logout</button></div>
+      </div>
+    </header>
     <nav class="project-nav">
       <button type="button" class="project-nav-item" id="back-nav">TRANSMITTALS</button>
     </nav>
@@ -29,8 +42,8 @@
       </div>
       <div class="drawings-table-wrap">
         <table class="drawings-table assigned-drawings-table">
-          <thead><tr><th>Select</th><th>QR code</th><th>Drawing #</th><th>Revision</th><th>Description</th><th>Approval status</th><th>PDF</th></tr></thead>
-          <tbody id="drawing-rows"><tr><td colspan="7">Loading drawings...</td></tr></tbody>
+          <thead><tr><th>Select</th><th>QR code</th><th>Drawing #</th><th>Instance mark no</th><th>Revision</th><th>Description</th><th>Approval status</th><th>PDF</th></tr></thead>
+          <tbody id="drawing-rows"><tr><td colspan="8">Loading drawings...</td></tr></tbody>
         </table>
       </div>
     </main>
@@ -45,6 +58,35 @@
     const descriptionFilter = document.getElementById('description-filter');
     let drawings = [];
 
+    document.querySelector('.brand').onclick = () => { window.location.href = '/'; };
+    const userMenuWrap = document.querySelector('.user-menu-wrap');
+    const userButton = userMenuWrap.querySelector('.user-button');
+    const userMenu = userMenuWrap.querySelector('.user-menu');
+    const logoutButton = userMenuWrap.querySelector('.logout-menu-item');
+    userButton.onclick = (event) => {
+      event.stopPropagation();
+      const hidden = userMenu.classList.toggle('hidden');
+      userButton.setAttribute('aria-expanded', String(!hidden));
+    };
+    logoutButton.onclick = async () => {
+      try { await fetch('/api/auth/logout', { method: 'POST' }); } finally { window.location.href = '/'; }
+    };
+    document.addEventListener('click', (event) => {
+      if (!userMenuWrap.contains(event.target)) {
+        userMenu.classList.add('hidden');
+        userButton.setAttribute('aria-expanded', 'false');
+      }
+    });
+    fetch('/api/auth/me').then(async (response) => {
+      if (!response.ok) throw new Error('Not authenticated');
+      const payload = await response.json();
+      const displayName = payload.contractor?.contractorName || payload.contractor?.username || 'User';
+      userButton.textContent = displayName;
+      userButton.setAttribute('aria-label', `User profile: ${displayName}`);
+    }).catch(() => {
+      window.location.href = `/?return=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+    });
+
     const escapeHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
     function render() {
@@ -56,20 +98,21 @@
         return matchesDrawingNumber && matchesDescription;
       });
       rows.innerHTML = filtered.length ? filtered.map((drawing) => `
-        <tr data-drawing-id="${drawing.drawingId}">
-          <td><input class="drawing-check" type="checkbox" aria-label="Select ${escapeHtml(drawing.drawingNumber)}"></td>
-          <td><img class="drawing-qr" src="${drawing.qrUrl}" alt="Assembly QR code for ${escapeHtml(drawing.drawingNumber)}"></td>
+        <tr data-row-key="${escapeHtml(drawing.rowKey)}">
+          <td><input class="drawing-check" type="checkbox" aria-label="Select ${escapeHtml(drawing.instanceMark || drawing.drawingNumber)}"></td>
+          <td><img class="drawing-qr" src="${drawing.qrUrl}" alt="Assembly QR code for ${escapeHtml(drawing.instanceMark || drawing.drawingNumber)}"></td>
           <td><strong>${escapeHtml(drawing.drawingNumber)}</strong></td>
+          <td><strong>${escapeHtml(drawing.instanceMark || '—')}</strong></td>
           <td>${escapeHtml(drawing.revision)}</td>
           <td>${escapeHtml(drawing.description)}</td>
           <td>${escapeHtml(drawing.approvalStatus)}</td>
           <td><a class="drawing-pdf" href="/api/drawings/${drawing.drawingId}/pdf" target="_blank" rel="noopener">PDF</a></td>
-        </tr>`).join('') : '<tr><td colspan="7">No drawings are assigned to this transmittal.</td></tr>';
+        </tr>`).join('') : '<tr><td colspan="8">No drawings are assigned to this transmittal.</td></tr>';
     }
 
     function selectedDrawings() {
-      const selectedIds = new Set([...document.querySelectorAll('.drawing-check:checked')].map((input) => Number(input.closest('tr').dataset.drawingId)));
-      return drawings.filter((drawing) => selectedIds.has(drawing.drawingId));
+      const selectedKeys = new Set([...document.querySelectorAll('.drawing-check:checked')].map((input) => input.closest('tr').dataset.rowKey));
+      return drawings.filter((drawing) => selectedKeys.has(drawing.rowKey));
     }
 
     function printDrawings(items) {
@@ -84,8 +127,8 @@
           <button type="button" class="qr-preview-close" aria-label="Close preview">&times;</button>
           <div class="sheet">${items.map((drawing) => `
             <section class="label">
-              <img src="${escapeHtml(drawing.qrUrl)}" alt="Assembly QR code for ${escapeHtml(drawing.drawingNumber)}">
-              <div class="number">${escapeHtml(drawing.drawingNumber)}</div>
+              <img src="${escapeHtml(drawing.qrUrl)}" alt="Assembly QR code for ${escapeHtml(drawing.instanceMark || drawing.drawingNumber)}">
+              <div class="number">${escapeHtml(drawing.instanceMark || drawing.drawingNumber)}</div>
               <div class="qr-value">${escapeHtml(drawing.qrCode)}</div>
               <div class="description">${escapeHtml(drawing.description)}</div>
             </section>`).join('')}</div>
@@ -115,7 +158,7 @@
 
     if (!jobNumber || !transmittalId) {
       title.textContent = 'Assigned drawings';
-      rows.innerHTML = '<tr><td colspan="7">A project and transmittal are required.</td></tr>';
+      rows.innerHTML = '<tr><td colspan="8">A project and transmittal are required.</td></tr>';
     } else {
       fetch(`/api/transmittal-drawings?job=${encodeURIComponent(jobNumber)}&transmittal=${encodeURIComponent(transmittalId)}`)
         .then(async (response) => { const payload = await response.json(); if (!response.ok) throw new Error(payload.error || 'Unable to load assigned drawings'); return payload; })
@@ -126,7 +169,7 @@
           title.textContent = `${payload.jobNumber} Assigned Drawings (${drawings.length})`;
           render();
         })
-        .catch((error) => { title.textContent = `${jobNumber} Assigned Drawings`; rows.innerHTML = `<tr><td colspan="7">${escapeHtml(error.message)}</td></tr>`; });
+        .catch((error) => { title.textContent = `${jobNumber} Assigned Drawings`; rows.innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`; });
     }
   </script>
 </body>

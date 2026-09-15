@@ -11,15 +11,8 @@
     <header class="topbar detail-topbar">
       <div class="topbar-left">
         <button class="menu-button" type="button" aria-label="Open menu">☰</button>
-        <div class="brand" aria-label="Adani Fab & Erection Tracker" title="Adani Fab & Erection Tracker" style="cursor: pointer;">
-          <div class="brand-mark" aria-hidden="true">
-            <span class="brand-mark-inner"></span>
-          </div>
-          <div class="brand-text">
-            <span class="tekla">Adani</span>
-            <span class="powerfab">Fab &amp; Erection</span>
-            <span class="go">Tracker</span>
-          </div>
+        <div class="brand" aria-label="Adani" title="Adani" style="cursor: pointer;">
+          <img class="adani-logo" src="/Adani_logo.png" alt="Adani">
         </div>
       </div>
       <div class="user-menu-wrap">
@@ -79,6 +72,7 @@
 
         <article class="detail-card">
           <h2>Transmittals</h2>
+          <div id="transmittals-count" class="detail-card-value">0</div>
           <button type="button" id="transmittals-view" class="detail-button">VIEW</button>
         </article>
 
@@ -107,19 +101,20 @@
           <button type="button" class="detail-button">VIEW</button>
         </article>
 
-        <article class="detail-card">
+        <article class="detail-card" id="production-status-card">
           <h2>Production Status</h2>
-          <button type="button" class="detail-button">VIEW</button>
+          <button type="button" id="production-status-view" class="detail-button">VIEW</button>
         </article>
 
         <article class="detail-card shipping-card">
-          <h2>Shipping Status</h2>
-          <button type="button" class="detail-button">VIEW</button>
+          <h2>Shift to Paint</h2>
+          <button type="button" id="shipping-status-view" class="detail-button">VIEW</button>
         </article>
       </div>
     </main>
   </div>
 
+  <script src="/time.js"></script>
   <script>
     async function loadProjectOverview() {
       const params = new URLSearchParams(window.location.search);
@@ -135,7 +130,8 @@
 
       try {
         const response = await fetch(`/api/project-detail?job=${encodeURIComponent(jobNumber)}`);
-        const payload = await response.json();
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || 'Unable to load project');
         const project = payload.project;
 
         if (!project) {
@@ -152,10 +148,11 @@
           project.plant ? `Plant: ${project.plant}` : null,
           project.unit ? `Unit: ${project.unit}` : null,
           project.status ? `Status: ${project.status}` : null,
-          project.updatedAt ? `Updated: ${new Date(project.updatedAt).toLocaleString()}` : null
+            project.updatedAt ? `Updated: ${formatIndiaDateTime(project.updatedAt)}` : null
         ].filter(Boolean);
 
         meta.innerHTML = details.map((item) => `<span>${item}</span>`).join('');
+        document.getElementById('transmittals-count').textContent = project.transmittalCount ?? 0;
 
         const countingMap = [
           ['assemblies-count', project.assemblyCount],
@@ -191,18 +188,20 @@
         const openTransmittals = () => { window.location.href = `/transmittals.html?job=${encodeURIComponent(jobNumber)}`; };
         document.getElementById('inspections-nav').addEventListener('click', openInspections);
         document.getElementById('inspections-view').addEventListener('click', openInspections);
+        document.getElementById('production-status-view').addEventListener('click', () => { window.location.href = `/production-status.html?job=${encodeURIComponent(jobNumber)}`; });
         document.getElementById('transmittals-view').addEventListener('click', openTransmittals);
+        document.getElementById('shipping-status-view').addEventListener('click', () => { window.location.href = '/shift-to-paint.html?job=' + encodeURIComponent(jobNumber); });
 
         const brand = document.querySelector('.brand');
         if (brand) {
           brand.addEventListener('click', () => {
-            window.location.href = `/project.html?job=${encodeURIComponent(jobNumber)}`;
+            window.location.href = '/';
           });
         }
       } catch (error) {
         console.error(error);
         title.textContent = jobNumber;
-        meta.textContent = 'Unable to load live project data from PowerFab.';
+        meta.textContent = error instanceof Error ? error.message : 'Unable to load live project data from PowerFab.';
       }
     }
 

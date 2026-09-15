@@ -1,8 +1,9 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root {
-  --header-blue: #0d6ea7;
-  --header-blue-2: #0a5a8d;
+  --header-blue: #1680b5;
+  --header-blue-2: #73449b;
+  --header-magenta: #c52d6e;
   --bg: #e7e7e7;
   --text: #1b1b1b;
   --white: #ffffff;
@@ -44,15 +45,18 @@ body.detail-page {
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
-  background: linear-gradient(90deg, var(--header-blue) 0%, var(--header-blue-2) 100%);
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  background: #ffffff;
   padding: 0 18px;
-  box-shadow: inset 0 -1px 0 rgba(255,255,255,0.08);
+  box-shadow: inset 0 -1px 0 rgba(20,20,20,0.14);
 }
 
 .project-nav-item {
   border: 0;
   background: transparent;
-  color: rgba(255,255,255,0.9);
+  color: #18354b;
   font-size: 0.74rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -62,7 +66,7 @@ body.detail-page {
 }
 
 .project-nav-item.active {
-  border-bottom: 3px solid rgba(255,255,255,0.9);
+  border-bottom: 3px solid #18354b;
 }
 
 .detail-content {
@@ -218,7 +222,7 @@ body.detail-page {
 }
 
 .contractor-session {
-  display: flex;
+  display: none !important;
   align-items: center;
   justify-content: center;
   gap: 14px;
@@ -271,6 +275,19 @@ body.detail-page {
 .inspection-field-grid input {
   width: 100%;
   box-sizing: border-box;
+}
+
+.inspection-checkbox-label {
+  display: flex !important;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.inspection-checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
 }
 
 .inspection-tabs {
@@ -378,13 +395,24 @@ body.detail-page {
 }
 
 .topbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: 108px;
   padding: 0 24px 0 18px;
-  background: linear-gradient(90deg, var(--header-blue) 0%, var(--header-blue-2) 100%);
-  box-shadow: inset 0 -1px 0 rgba(255,255,255,0.08);
+  background: #ffffff;
+  box-shadow: 0 1px 0 rgba(20,20,20,0.08);
+}
+
+.topbar::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 4px;
+  background: linear-gradient(90deg, var(--header-blue) 0%, var(--header-blue-2) 62%, var(--header-magenta) 100%);
 }
 
 .topbar-left {
@@ -397,10 +425,14 @@ body.detail-page {
   position: relative;
 }
 
-.menu-button, .user-button {
+.menu-button {
+  display: none;
+}
+
+.user-button {
   border: 0;
   background: transparent;
-  color: var(--white);
+  color: #263044;
   font-size: 2.5rem;
   line-height: 1;
   cursor: pointer;
@@ -443,6 +475,21 @@ body.detail-page {
   align-items: center;
   gap: 14px;
   color: var(--white);
+  width: 190px;
+  height: 58px;
+  background: transparent;
+}
+
+.brand > * {
+  display: none;
+}
+
+.brand .adani-logo {
+  display: block;
+  width: 190px;
+  height: 58px;
+  object-fit: contain;
+  object-position: left center;
 }
 
 .brand-mark {

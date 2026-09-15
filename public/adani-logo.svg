@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 86" role="img" aria-labelledby="title">
+  <title id="title">Adani</title>
+  <defs>
+    <linearGradient id="adani-gradient" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#078ab7" />
+      <stop offset="0.34" stop-color="#216bb8" />
+      <stop offset="0.62" stop-color="#71469d" />
+      <stop offset="0.84" stop-color="#a72b83" />
+      <stop offset="1" stop-color="#cc2e68" />
+    </linearGradient>
+  </defs>
+  <text x="2" y="69" fill="url(#adani-gradient)" font-family="Arial Rounded MT Bold, Trebuchet MS, Arial, sans-serif" font-size="78" font-weight="700" letter-spacing="-7">adani</text>
+  <circle cx="279" cy="13" r="7" fill="#cc2e68" />
+</svg>

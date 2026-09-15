@@ -1,4 +1,4 @@
-import 'dotenv/config';
+﻿import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { PrismaClient, FabricationStatus } from '@prisma/client';
@@ -8,6 +8,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { createPool } from 'mysql2/promise';
 import { existsSync, readdirSync } from 'fs';
 import { join, resolve } from 'path';
+import { deleteContractorSession, loadContractorSessions, upsertContractorSession } from './sessionStore';
 
 const prisma = new PrismaClient();
 const app = express();
@@ -15,7 +16,8 @@ const port = Number(process.env.PORT ?? 3000);
 const publicAppUrl = process.env.PUBLIC_APP_URL ?? `http://localhost:${port}`;
 const powerFabDrawingsUrlTemplate = process.env.POWERFAB_DRAWINGS_URL_TEMPLATE ?? 'https://adani.teklapowerfab.net/pdc-job-overview?ProductionControlID={productionControlId}#sectionDrawings';
 const drawingsRoot = process.env.POWERFAB_DRAWINGS_ROOT ?? '';
-const contractorSessions = new Map<string, { contractorId: number; expiresAt: number }>();
+const contractorSessionStoreFile = process.env.CONTRACTOR_SESSION_FILE ?? resolve(process.cwd(), 'data', 'contractor-sessions.json');
+const contractorSessions = loadContractorSessions(contractorSessionStoreFile);
 
 function findDrawingPdf(root: string, fileName: string): string | null {
   if (!existsSync(root)) return null;
@@ -157,6 +159,7 @@ async function ensureAssemblyScanTables() {
       qrCode VARCHAR(255) NOT NULL,
       jobNumber VARCHAR(255) NOT NULL,
       assemblyMark VARCHAR(255) NOT NULL,
+      inspectionType VARCHAR(30) NOT NULL DEFAULT 'VENDOR_FITUP',
       result VARCHAR(30) NOT NULL,
       inspector VARCHAR(255) NOT NULL,
       remarks TEXT NULL,
@@ -167,7 +170,46 @@ async function ensureAssemblyScanTables() {
       INDEX idx_fitup_contractor (contractorId)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  const [inspectionTypeColumns] = await mysqlConnection.query(
+    `SELECT 1 FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'contractor_fitup_inspections' AND COLUMN_NAME = 'inspectionType'
+     LIMIT 1`
+  );
+  if (!(inspectionTypeColumns as Array<Record<string, any>>).length) {
+    await mysqlConnection.query(
+      `ALTER TABLE contractor_fitup_inspections
+       ADD COLUMN inspectionType VARCHAR(30) NOT NULL DEFAULT 'VENDOR_FITUP'`
+    );
+  }
 
+  await mysqlConnection.query(`
+    CREATE TABLE IF NOT EXISTS shipping_tickets (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      ticketNumber VARCHAR(64) NOT NULL UNIQUE,
+      jobNumber VARCHAR(255) NOT NULL,
+      contractorId BIGINT NOT NULL,
+      shippingDate DATE NULL,
+      destination VARCHAR(500) NULL,
+      remarks TEXT NULL,
+      createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      INDEX idx_shipping_ticket_job (jobNumber)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  await mysqlConnection.query(`
+    CREATE TABLE IF NOT EXISTS shipping_ticket_items (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      shippingTicketId BIGINT NOT NULL,
+      qrCode VARCHAR(255) NOT NULL,
+      assemblyMark VARCHAR(255) NOT NULL,
+      quantity DECIMAL(18,3) NOT NULL DEFAULT 0,
+      weight DECIMAL(18,3) NOT NULL DEFAULT 0,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_shipping_ticket_item (shippingTicketId, qrCode),
+      INDEX idx_shipping_ticket_item_qr (qrCode),
+      CONSTRAINT fk_shipping_ticket_items_ticket FOREIGN KEY (shippingTicketId) REFERENCES shipping_tickets(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
   const bootstrapUsername = String(process.env.CONTRACTOR_BOOTSTRAP_USERNAME ?? '').trim();
   const bootstrapPassword = String(process.env.CONTRACTOR_BOOTSTRAP_PASSWORD ?? '');
   const bootstrapName = String(process.env.CONTRACTOR_BOOTSTRAP_NAME ?? '').trim();
@@ -188,6 +230,10 @@ async function ensureAssemblyScanTables() {
 function buildAssemblyQrCode(jobNumber: string, assemblyKey: string | number) {
   const base = `${String(jobNumber || 'powerfab').replace(/[^A-Za-z0-9]/g, '').slice(0, 12)}-${String(assemblyKey || 'assembly')}`;
   return `pf-${createHash('sha256').update(base).digest('hex').slice(0, 12)}`;
+}
+
+function buildAssemblyInstanceMark(jobNumber: string, assemblyMark: string, instanceNumber: number) {
+  return `${jobNumber}-${assemblyMark}-${instanceNumber}`;
 }
 
 function normalizeAssemblyQrCode(value: string) {
@@ -225,12 +271,16 @@ async function findAssemblyRecordByQrCode(qrCode: string) {
       const assemblyId = assembly.ProductionControlAssemblyID ?? null;
       if (assemblyId === null) continue;
 
-      const candidateQr = buildAssemblyQrCode(jobNumber, assemblyId);
-      if (candidateQr === normalizedQrCode) {
+      const assemblyQuantity = Number(assembly.AssemblyQuantity ?? 0);
+      const candidateKeys = [assemblyId, ...Array.from({ length: assemblyQuantity }, (_value, index) => `${assemblyId}-${index + 1}`)];
+      const matchedKey = candidateKeys.find((key) => buildAssemblyQrCode(jobNumber, key) === normalizedQrCode);
+      if (matchedKey !== undefined) {
         return {
+          qrCode: normalizedQrCode,
           jobNumber,
           productionControlID: productionControlId,
           productionControlAssemblyID: Number(assemblyId),
+          instanceNumber: typeof matchedKey === 'string' && matchedKey.startsWith(`${assemblyId}-`) ? Number(matchedKey.slice(String(assemblyId).length + 1)) : null,
           assemblyMark: String(assembly.MainMark ?? '').replace(/\u0001/g, '').trim() || 'Unknown Assembly',
           assemblyQuantity: Number(assembly.AssemblyQuantity ?? 0),
           assemblyWeightEach: Number(assembly.AssemblyWeightEach ?? 0),
@@ -313,64 +363,64 @@ async function syncAssemblyStationToPowerFabTables(options: {
           String(item.mainMark || finalAssemblyMark).trim(),
           String(item.pieceMark || finalAssemblyMark).trim() || finalAssemblyMark,
           stationId || 0,
-          Math.max(Number(item.Quantity ?? 0), 1),
+            Math.max(Number(item.Quantity ?? 0), 1),
           Number(options.hours ?? 0),
           options.batchId || `${finalJobNumber}-${finalAssemblyMark}`
         ]
       );
     }
 
-    const previousStationId = stationId > 0 ? Math.max(stationId - 1, 0) : null;
-    const nextStationId = stationId > 0 ? stationId + 1 : null;
+      const previousStationId = stationId > 0 ? Math.max(stationId - 1, 0) : null;
+      const nextStationId = stationId > 0 ? stationId + 1 : null;
 
-    await mysqlConnection.query(
-      `INSERT INTO \`productioncontrolitemstationsummary\` (
-        ProductionControlItemID,
-        ProductionControlID,
-        SequenceID,
-        StationID,
-        StationType,
-        PositionInRoute,
-        TotalQuantity,
-        QuantityCompleted,
-        Hours,
-        LastDateCompleted,
-        FailedInspectionTestQuantity,
-        PreviousStationID,
-        PreviousStationQuantityCompleted,
-        NextStationID,
-        NextStationQuantityCompleted,
-        ProductionLengthEach,
-        ProductionSquareMetersEach,
-        ProductionWeightEach,
-        ProductionGrossWeightEach,
-        ProductionModelWeightEach,
-        ProductionSurfaceAreaEach
-      ) VALUES (?, ?, 0, ?, 0, ?, ?, 1, 0, CURDATE(), 0, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE
-        StationID = VALUES(StationID), PositionInRoute = VALUES(PositionInRoute),
-        TotalQuantity = VALUES(TotalQuantity), QuantityCompleted = VALUES(QuantityCompleted),
-        LastDateCompleted = VALUES(LastDateCompleted), PreviousStationID = VALUES(PreviousStationID),
-        NextStationID = VALUES(NextStationID), ProductionLengthEach = VALUES(ProductionLengthEach),
-        ProductionSquareMetersEach = VALUES(ProductionSquareMetersEach), ProductionWeightEach = VALUES(ProductionWeightEach),
-        ProductionGrossWeightEach = VALUES(ProductionGrossWeightEach), ProductionModelWeightEach = VALUES(ProductionModelWeightEach),
-        ProductionSurfaceAreaEach = VALUES(ProductionSurfaceAreaEach)` ,
-      [
-        Number(options.productionControlAssemblyID ?? record?.productionControlAssemblyID ?? 0) || 0,
-        finalProductionControlId,
-        stationId || 0,
-        Math.max(stagePosition, 0) + 1,
-        Math.max(assemblyQty, 1),
-        previousStationId,
-        nextStationId,
-        Number(options.assemblyLengthEach ?? record?.assemblyLengthEach ?? 0),
-        Number(options.assemblySquareMetersEach ?? record?.assemblySquareMetersEach ?? 0),
-        Number(options.assemblyWeightEach ?? record?.assemblyWeightEach ?? 0),
-        Number(options.grossAssemblyWeightEach ?? record?.grossAssemblyWeightEach ?? 0),
-        Number(options.assemblyWeightEach ?? record?.assemblyWeightEach ?? 0),
-        Number(options.assemblySurfaceAreaEach ?? record?.assemblySurfaceAreaEach ?? 0)
-      ]
-    );
+      await mysqlConnection.query(
+        `INSERT INTO \`productioncontrolitemstationsummary\` (
+          ProductionControlItemID,
+          ProductionControlID,
+          SequenceID,
+          StationID,
+          StationType,
+          PositionInRoute,
+          TotalQuantity,
+          QuantityCompleted,
+          Hours,
+          LastDateCompleted,
+          FailedInspectionTestQuantity,
+          PreviousStationID,
+          PreviousStationQuantityCompleted,
+          NextStationID,
+          NextStationQuantityCompleted,
+          ProductionLengthEach,
+          ProductionSquareMetersEach,
+          ProductionWeightEach,
+          ProductionGrossWeightEach,
+          ProductionModelWeightEach,
+          ProductionSurfaceAreaEach
+        ) VALUES (?, ?, 0, ?, 0, ?, ?, 1, 0, CURDATE(), 0, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          StationID = VALUES(StationID), PositionInRoute = VALUES(PositionInRoute),
+          TotalQuantity = VALUES(TotalQuantity), QuantityCompleted = VALUES(QuantityCompleted),
+          LastDateCompleted = VALUES(LastDateCompleted), PreviousStationID = VALUES(PreviousStationID),
+          NextStationID = VALUES(NextStationID), ProductionLengthEach = VALUES(ProductionLengthEach),
+          ProductionSquareMetersEach = VALUES(ProductionSquareMetersEach), ProductionWeightEach = VALUES(ProductionWeightEach),
+          ProductionGrossWeightEach = VALUES(ProductionGrossWeightEach), ProductionModelWeightEach = VALUES(ProductionModelWeightEach),
+          ProductionSurfaceAreaEach = VALUES(ProductionSurfaceAreaEach)`,
+        [
+          Number(options.productionControlAssemblyID ?? record?.productionControlAssemblyID ?? 0) || 0,
+          finalProductionControlId,
+          stationId || 0,
+          Math.max(stagePosition, 0) + 1,
+          Math.max(assemblyQty, 1),
+          previousStationId,
+          nextStationId,
+          Number(options.assemblyLengthEach ?? record?.assemblyLengthEach ?? 0),
+          Number(options.assemblySquareMetersEach ?? record?.assemblySquareMetersEach ?? 0),
+          Number(options.assemblyWeightEach ?? record?.assemblyWeightEach ?? 0),
+          Number(options.grossAssemblyWeightEach ?? record?.grossAssemblyWeightEach ?? 0),
+          Number(options.assemblyWeightEach ?? record?.assemblyWeightEach ?? 0),
+          Number(options.assemblySurfaceAreaEach ?? record?.assemblySurfaceAreaEach ?? 0)
+        ]
+      );
   } catch (error) {
     console.error('Unable to sync assembly stage to real PowerFab tables', error);
     throw new Error('Unable to write the scan to PowerFab tables.', { cause: error });
@@ -544,6 +594,12 @@ const fitupInspectionInput = z.object({
   remarks: z.string().trim().max(4000).optional(),
   checks: z.record(z.string(), z.unknown()).optional()
 });
+const shippingTicketInput = z.object({
+  qrCodes: z.array(z.string().trim().min(1)).min(1).max(500),
+  shippingDate: z.string().trim().max(10).optional(),
+  destination: z.string().trim().max(500).optional(),
+  remarks: z.string().trim().max(4000).optional()
+});
 
 app.post('/api/auth/login', async (request, response) => {
   const input = contractorLoginInput.safeParse(request.body);
@@ -571,13 +627,19 @@ app.post('/api/auth/login', async (request, response) => {
   }
   if (!contractor) return response.status(401).json({ error: 'Invalid contractor login.' });
   const token = randomBytes(32).toString('hex');
-  contractorSessions.set(token, { contractorId: Number(contractor.id), expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+  const expiresAt = Date.now() + 8 * 60 * 60 * 1000;
+  upsertContractorSession(contractorSessionStoreFile, token, Number(contractor.id), expiresAt);
+  contractorSessions.set(token, { contractorId: Number(contractor.id), expiresAt });
   response.setHeader('Set-Cookie', `powerfab_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800`);
   response.json({ contractor: { username: contractor.username, contractorName: contractor.contractorName } });
 });
 
 app.post('/api/auth/logout', (request, response) => {
-  contractorSessions.delete(getSessionToken(request));
+  const token = getSessionToken(request);
+  if (token) {
+    contractorSessions.delete(token);
+    deleteContractorSession(contractorSessionStoreFile, token);
+  }
   response.setHeader('Set-Cookie', 'powerfab_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
   response.json({ ok: true });
 });
@@ -660,10 +722,11 @@ app.get('/api/projects', async (request, response, next) => {
   try {
     const contractorId = getContractorId(request);
     if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
-    const [assignedRows] = await mysqlConnection.query('SELECT jobNumber FROM contractor_project_assignments WHERE contractorId = ?', [contractorId]);
-    const assignedJobs = new Set((assignedRows as Array<Record<string, any>>).map((row) => String(row.jobNumber)));
-    const projects = (await loadProjectsFromDatabase()).filter((project) => assignedJobs.has(String(project.jobNumber)));
-    response.json({ projects });
+    const projects = await loadProjectsFromDatabase();
+    const accessibleProjects = await Promise.all(
+      projects.map(async (project) => (await contractorCanAccessJob(contractorId, String(project.jobNumber))) ? project : null)
+    );
+    response.json({ projects: accessibleProjects.filter((project): project is NonNullable<typeof project> => project !== null) });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown database error';
     response.status(500).json({
@@ -687,6 +750,14 @@ async function getSingleValue(query: string, values: unknown[] = []) {
 
 function cleanPowerFabValue(value: unknown) {
   return String(value ?? '').replace(/\u0001/g, '').trim() || '—';
+}
+
+function parseIndiaDateTime(value: unknown) {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) return new Date();
+  return /(?:Z|[+-]\d{2}:?\d{2})$/i.test(rawValue)
+    ? new Date(rawValue)
+    : new Date(`${rawValue.length === 16 ? `${rawValue}:00` : rawValue}+05:30`);
 }
 
 function hashContractorPassword(password: string, salt = randomBytes(16).toString('hex')) {
@@ -716,7 +787,10 @@ function getContractorId(request: express.Request) {
   const token = getSessionToken(request);
   const session = contractorSessions.get(token);
   if (!session || session.expiresAt < Date.now()) {
-    if (token) contractorSessions.delete(token);
+    if (token) {
+      contractorSessions.delete(token);
+      deleteContractorSession(contractorSessionStoreFile, token);
+    }
     return null;
   }
   return session.contractorId;
@@ -745,7 +819,7 @@ async function contractorCanAccessQr(contractorId: number, qrCode: string) {
   return assembly;
 }
 
-async function contractorCanSubmitFitupInspection(contractorId: number) {
+async function getFitupInspectionRole(contractorId: number) {
   const [rows] = await mysqlConnection.query(
     `SELECT u.ExternalUser
      FROM contractor_users cu
@@ -755,18 +829,22 @@ async function contractorCanSubmitFitupInspection(contractorId: number) {
     [contractorId]
   );
   const user = (rows as Array<Record<string, any>>)[0];
-  if (!user || !Boolean(user.ExternalUser)) return true;
+  if (!user || !Boolean(user.ExternalUser)) return 'VENDOR_FITUP' as const;
 
   const [permissionRows] = await mysqlConnection.query(
-    `SELECT 1
+    `SELECT ua.Value
      FROM contractor_users cu
      JOIN users u ON u.Username = cu.username AND u.Active = 1
      JOIN useraccess ua ON ua.UserID = u.UserID
-     WHERE cu.id = ? AND ua.Type = 'INSP' AND CAST(ua.Value AS UNSIGNED) = 1
+    WHERE cu.id = ? AND ua.Type = 'INSP'
+     ORDER BY CAST(ua.Value AS UNSIGNED) DESC
      LIMIT 1`,
     [contractorId]
   );
-  return (permissionRows as Array<Record<string, any>>).length > 0;
+  const permission = Number((permissionRows as Array<Record<string, any>>)[0]?.Value ?? 0);
+  if (permission === 1) return 'VENDOR_FITUP' as const;
+  if (permission === 2) return 'CLIENT_FITUP' as const;
+  return null;
 }
 
 function buildPowerFabDrawingsUrl(productionControlId: number) {
@@ -891,7 +969,7 @@ app.get('/api/project-detail', async (request, response) => {
     const categoryCount = projectId ? await getSingleValue('SELECT COUNT(DISTINCT CategoryID) AS total FROM `productioncontrolitems` WHERE `ProductionControlID` = ?', [productionControlId || 0]) : 0;
     const inspectionCount = projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `inspectiontestrecords` WHERE `ProductionControlID` = ?', [productionControlId || 0]) : 0;
     const rfiCount = projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `requestforinformationdrawings` WHERE `ProjectID` = ?', [projectId]) : 0;
-    const transmittalCount = projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `drawingtransmittals` WHERE `DrawingID` IN (SELECT `DrawingID` FROM `drawings` WHERE `ProjectID` = ?)', [projectId]) : 0;
+    const transmittalCount = projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `transmittals` WHERE `ProjectID` = ?', [projectId]) : 0;
 
     const detail = {
       jobNumber: project.JobNumber ?? jobNumber,
@@ -1082,7 +1160,8 @@ app.get('/api/transmittal-drawings', async (request, response) => {
   try {
     const productionControlId = Number(await getSingleValue('SELECT ProductionControlID FROM productioncontroljobs WHERE JobNumber = ? LIMIT 1', [context.jobNumber]));
     const [drawingRows] = await mysqlConnection.query(
-      `SELECT DISTINCT d.DrawingID, d.DrawingNumber, d.Description,
+            `SELECT DISTINCT d.DrawingID, d.DrawingNumber, d.Description,
+              (SELECT pcj.Comment2 FROM productioncontroljobs pcj WHERE pcj.ProductionControlID = ? LIMIT 1) AS comment2,
               COALESCE(dr.Revision, '—') AS revision,
               COALESCE(aps.Description, '—') AS approvalStatus,
               (SELECT MIN(pca.ProductionControlAssemblyID)
@@ -1092,6 +1171,8 @@ app.get('/api/transmittal-drawings', async (request, response) => {
                 AND pca.ProductionControlAssemblyID = pci.ProductionControlAssemblyID
                WHERE pci.DrawingID = d.DrawingID
                  AND pci.ProductionControlID = ?) AS productionControlAssemblyID
+              ,(SELECT pca.MainMark FROM productioncontrolassemblies pca WHERE pca.ProductionControlID = ? AND pca.ProductionControlAssemblyID = (SELECT MIN(pci2.ProductionControlAssemblyID) FROM productioncontrolitems pci2 WHERE pci2.DrawingID = d.DrawingID AND pci2.ProductionControlID = ?)) AS assemblyMark
+              ,(SELECT pca.AssemblyQuantity FROM productioncontrolassemblies pca WHERE pca.ProductionControlID = ? AND pca.ProductionControlAssemblyID = (SELECT MIN(pci3.ProductionControlAssemblyID) FROM productioncontrolitems pci3 WHERE pci3.DrawingID = d.DrawingID AND pci3.ProductionControlID = ?)) AS assemblyQuantity
        FROM drawingtransmittals dt
        JOIN transmittals t ON t.TransmittalID = dt.TransmittalID
        JOIN drawings d ON d.DrawingID = dt.DrawingID
@@ -1100,26 +1181,41 @@ app.get('/api/transmittal-drawings', async (request, response) => {
        WHERE dt.TransmittalID = ? AND t.ProjectID = ?
        ORDER BY d.DrawingNumber
        LIMIT 2000`,
-      [productionControlId, transmittalId, Number(context.project.ProjectID)]
+      [productionControlId, productionControlId, productionControlId, productionControlId, productionControlId, productionControlId, transmittalId, Number(context.project.ProjectID)]
     );
 
     response.json({
       jobNumber: context.jobNumber,
       transmittalId,
-      drawings: (drawingRows as Array<Record<string, any>>).map((drawing) => ({
+      drawings: (drawingRows as Array<Record<string, any>>).flatMap((drawing) => {
+        const assemblyId = drawing.productionControlAssemblyID ? Number(drawing.productionControlAssemblyID) : 0;
+        const assemblyMark = cleanPowerFabValue(drawing.assemblyMark || drawing.DrawingNumber);
+        const comment2 = cleanPowerFabValue(drawing.comment2 || context.jobNumber);
+        const drawingMark = `${comment2}-${assemblyMark}`;
+        const quantity = Math.max(1, Number(drawing.assemblyQuantity ?? 1));
+        return Array.from({ length: assemblyId ? quantity : 1 }, (_value, index) => {
+          const instanceNumber = assemblyId ? index + 1 : null;
+          const qrCode = assemblyId
+            ? buildAssemblyQrCode(context.jobNumber, `${assemblyId}-${instanceNumber}`)
+            : '';
+          const instanceMark = instanceNumber ? buildAssemblyInstanceMark(comment2, assemblyMark, instanceNumber) : drawingMark;
+          return {
         drawingId: Number(drawing.DrawingID),
-        drawingNumber: cleanPowerFabValue(drawing.DrawingNumber),
+        rowKey: `${Number(drawing.DrawingID)}-${instanceNumber ?? 0}`,
+        drawingNumber: drawingMark,
+        instanceMark,
+        instanceNumber,
         description: cleanPowerFabValue(drawing.Description),
         revision: cleanPowerFabValue(drawing.revision),
         approvalStatus: cleanPowerFabValue(drawing.approvalStatus),
-        qrCode: drawing.productionControlAssemblyID
-          ? buildAssemblyQrCode(context.jobNumber, Number(drawing.productionControlAssemblyID))
-          : '',
-        qrUrl: drawing.productionControlAssemblyID
-          ? `/api/assemblies/${encodeURIComponent(buildAssemblyQrCode(context.jobNumber, Number(drawing.productionControlAssemblyID)))}/qr`
+        qrCode,
+        qrUrl: assemblyId
+          ? `/api/assemblies/${encodeURIComponent(qrCode)}/qr`
           : `/api/drawings/${Number(drawing.DrawingID)}/qr?job=${encodeURIComponent(context.jobNumber)}`,
-        qrType: drawing.productionControlAssemblyID ? 'assembly' : 'drawing'
-      }))
+        qrType: assemblyId ? 'assembly' : 'drawing'
+          };
+        });
+      })
     });
   } catch (error) {
     console.error('Unable to load transmittal drawings', error);
@@ -1131,7 +1227,7 @@ app.get('/api/project-inspections', async (request, response) => {
   const context = await getAuthorizedProject(request, response);
   if (!context) return;
   const [powerFabRows] = await mysqlConnection.query(
-    `SELECT itr.InspectionTestRecordID, itr.TestDateTime, itr.TestUpdatedDateTime,
+    `SELECT itr.InspectionTestRecordID, itr.InspectionTestID, itr.TestDateTime, itr.TestUpdatedDateTime,
             itr.TestFailed, itr.Quantity, it.InspectionTestID,
             COALESCE(itt.Description, 'Inspection') AS inspectionType,
             pis.MainMark, pis.PieceMark
@@ -1145,11 +1241,70 @@ app.get('/api/project-inspections', async (request, response) => {
     [await getSingleValue('SELECT ProductionControlID FROM productioncontroljobs WHERE JobNumber = ? LIMIT 1', [context.jobNumber])]
   );
   const [portalRows] = await mysqlConnection.query(
-    `SELECT id, qrCode, assemblyMark, result, inspector, remarks, createdAt
+    `SELECT id, qrCode, assemblyMark, inspectionType, result, inspector, remarks, createdAt
      FROM contractor_fitup_inspections WHERE jobNumber = ? ORDER BY createdAt DESC LIMIT 1000`,
     [context.jobNumber]
   );
   response.json({ jobNumber: context.jobNumber, powerFabInspections: powerFabRows, contractorInspections: portalRows });
+});
+
+app.get('/api/project-production-status', async (request, response) => {
+  const context = await getAuthorizedProject(request, response);
+  if (!context) return;
+  try {
+    const productionControlId = await getSingleValue('SELECT ProductionControlID FROM productioncontroljobs WHERE JobNumber = ? LIMIT 1', [context.jobNumber]);
+    await reconcileFitupInspectionStatus(Number(productionControlId));
+    const [stationRows] = await mysqlConnection.query(
+      `SELECT StationID, Description, StationNumber
+       FROM stations
+       WHERE StationID > 0
+       ORDER BY StationNumber, StationID`
+    );
+    const stations = (stationRows as Array<Record<string, any>>).map(row => ({
+      stationId: Number(row.StationID),
+      description: cleanPowerFabValue(row.Description || 'Station'),
+      stationNumber: Number(row.StationNumber || 0)
+    }));
+    const [assemblyRows] = await mysqlConnection.query(
+            `SELECT ProductionControlAssemblyID, REPLACE(MainMark, CHAR(1), '') AS mainMark,
+              AssemblyQuantity, AssemblyWeightEach,
+              (SELECT MIN(pci.DrawingNumber) FROM productioncontrolitems pci
+               WHERE pci.ProductionControlID = productioncontrolassemblies.ProductionControlID
+           AND pci.ProductionControlAssemblyID = productioncontrolassemblies.ProductionControlAssemblyID) AS drawingNumber
+       FROM productioncontrolassemblies
+       WHERE ProductionControlID = ?
+       ORDER BY MainMark, ProductionControlAssemblyID`,
+      [productionControlId]
+    );
+    const [summaryRows] = await mysqlConnection.query(
+      `SELECT s.ProductionControlItemID, s.StationID, s.TotalQuantity, s.QuantityCompleted,
+              pci.ProductionControlAssemblyID
+       FROM productioncontrolitemstationsummary s
+       JOIN productioncontrolitems pci ON pci.ProductionControlItemID = s.ProductionControlItemID
+       WHERE s.ProductionControlID = ?`,
+      [productionControlId]
+    );
+    const summaries = new Map<string, { total: number; completed: number }>();
+    for (const row of summaryRows as Array<Record<string, any>>) {
+      summaries.set(`${row.ProductionControlAssemblyID}:${row.StationID}`, {
+        total: Number(row.TotalQuantity || 0),
+        completed: Number(row.QuantityCompleted || 0)
+      });
+    }
+    const assemblies = (assemblyRows as Array<Record<string, any>>).map(row => ({
+      assemblyId: Number(row.ProductionControlAssemblyID),
+      drawingNumber: cleanPowerFabValue(row.drawingNumber || row.mainMark || ''),
+      mainMark: cleanPowerFabValue(row.mainMark || ''),
+      quantity: Number(row.AssemblyQuantity || 0),
+      weight: Number(row.AssemblyWeightEach || 0),
+      stations: stations.map(station => summaries.get(`${row.ProductionControlAssemblyID}:${station.stationId}`) || { total: Number(row.AssemblyQuantity || 0), completed: 0, stationName: station.description })
+        .map((status, index) => ({ ...status, stationName: stations[index].description }))
+    }));
+    response.json({ jobNumber: context.jobNumber, productionControlId, stations, assemblies });
+  } catch (error) {
+    console.error('Unable to load project production status', error);
+    response.status(500).json({ error: 'Unable to load production status from PowerFab.' });
+  }
 });
 
 app.get('/api/drawings/:drawingId/pdf', async (request, response) => {
@@ -1218,6 +1373,7 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
   const contractorId = getContractorId(request);
   if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
   if (!(await contractorCanAccessQr(contractorId, qrCode))) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
+  const inspectionRole = await getFitupInspectionRole(contractorId);
   const [contractorRows] = await mysqlConnection.query('SELECT contractorName FROM contractor_users WHERE id = ? LIMIT 1', [contractorId]);
   const assignedContractor = (contractorRows as Array<Record<string, any>>)[0]?.contractorName ?? '';
 
@@ -1245,16 +1401,33 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
 
   const assemblyMatch = await findAssemblyRecordByQrCode(qrCode);
   const assemblyDrawing = assemblyMatch ? await getAssemblyDrawing(assemblyMatch.productionControlID, assemblyMatch.productionControlAssemblyID) : null;
+  const [projectRows] = await mysqlConnection.query(
+    `SELECT p.JobDescription, pcj.Comment2
+     FROM projects p
+     LEFT JOIN productioncontroljobs pcj ON pcj.JobNumber = p.JobNumber
+     WHERE p.JobNumber = ?
+     LIMIT 1`,
+    [assemblyMatch?.jobNumber || history[0]?.jobNumber || '']
+  );
+  const projectData = (projectRows as Array<Record<string, any>>)[0] ?? {};
+  const jobNumber = String(assemblyMatch?.jobNumber || history[0]?.jobNumber || '');
+  const assemblyMark = assemblyMatch?.assemblyMark || history[0]?.assemblyMark || '';
+  const drawingNumber = projectData.Comment2 && assemblyMark ? `${cleanPowerFabValue(projectData.Comment2)}-${assemblyMark}` : cleanPowerFabValue(assemblyDrawing?.DrawingNumber);
+  const instanceMark = assemblyMatch?.instanceNumber ? `${drawingNumber}-${assemblyMatch.instanceNumber}` : drawingNumber;
   const currentStage = history[0]?.stage ?? 'Fitup';
   response.json({
     qrCode,
     currentStage,
-    jobNumber: history[0]?.jobNumber || assemblyMatch?.jobNumber || '',
-    assemblyMark: history[0]?.assemblyMark || assemblyMatch?.assemblyMark || '',
+    jobNumber,
+    jobDescription: cleanPowerFabValue(projectData.JobDescription),
+    assemblyMark,
+    drawingNumber,
+    instanceMark,
+    instanceNumber: assemblyMatch?.instanceNumber ?? null,
+    assemblyWeight: assemblyMatch?.assemblyWeightEach ?? 0,
     contractorName: assignedContractor,
     drawingId: assemblyDrawing ? Number(assemblyDrawing.DrawingID) : null,
-    drawingNumber: assemblyDrawing ? cleanPowerFabValue(assemblyDrawing.DrawingNumber) : '',
-    availableInstanceNumbers: assemblyMatch ? await getAssemblyInstanceNumbers(assemblyMatch.productionControlID, assemblyMatch.productionControlAssemblyID) : [],
+    availableInstanceNumbers: assemblyMatch ? await getAvailableAssemblyInstanceNumbers(assemblyMatch) : [],
     stationData: stationRow ? {
       mainMark: stationRow.mainMark,
       pieceMark: stationRow.pieceMark,
@@ -1278,7 +1451,8 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
     productionControlAssemblyID: assemblyMatch?.productionControlAssemblyID ?? null,
     assemblyQuantity: assemblyMatch?.assemblyQuantity ?? 0,
     assemblyWeightEach: assemblyMatch?.assemblyWeightEach ?? 0,
-    inspectionOptions: await getInspectionOptions(),
+    inspectionFields: await getInspectionFields(inspectionRole === 'CLIENT_FITUP' ? 2 : 1),
+    inspectionRole,
     history
   });
 });
@@ -1297,23 +1471,53 @@ async function getAssemblyInstanceNumbers(productionControlID: number, productio
   return (rows as Array<Record<string, any>>).map((row) => Number(row.InstanceNumber)).filter((value) => Number.isFinite(value));
 }
 
-async function getInspectionOptions() {
+function buildInstanceNumberRange(quantity: number) {
+  const total = Math.max(0, Math.floor(Number(quantity) || 0));
+  return Array.from({ length: total }, (_value, index) => index + 1);
+}
+
+function parseInspectionInstanceNumbers(checks: Record<string, unknown>) {
+  return String(checks.instanceNumber ?? '')
+    .split(',')
+    .map((value) => Number(value.trim()))
+    .filter((value, index, values) => Number.isInteger(value) && value > 0 && values.indexOf(value) === index);
+}
+
+async function getAvailableAssemblyInstanceNumbers(assembly: Record<string, any>) {
+  const instanceNumbers = await getAssemblyInstanceNumbers(assembly.productionControlID, assembly.productionControlAssemblyID);
+  return instanceNumbers.length ? instanceNumbers : buildInstanceNumberRange(Number(assembly.assemblyQuantity ?? 0));
+}
+
+function inspectionFieldKey(fieldName: string) {
+  return fieldName.toLowerCase().replace(/[^a-z0-9]+(.)/g, (_match, character) => String(character).toUpperCase());
+}
+
+async function getInspectionFields(inspectionTestId: number) {
   const [rows] = await mysqlConnection.query(
-    `SELECT f.InspectionTestFieldID, s.String AS fieldName, os.String AS optionValue
+    `SELECT f.*, f.InspectionTestFieldID, s.String AS fieldName, os.String AS optionValue
      FROM inspectiontestfields f
      JOIN inspectionteststrings s ON s.InspectionTestStringID = f.FieldNameStringID
-     JOIN inspectiontestfieldoptions o ON o.InspectionTestFieldID = f.InspectionTestFieldID
-     JOIN inspectionteststrings os ON os.InspectionTestStringID = o.OptionStringID
-     WHERE f.InspectionTestID = 1
-     ORDER BY f.FieldIndex, o.InspectionTestFieldOptionID`
+     LEFT JOIN inspectiontestfieldoptions o ON o.InspectionTestFieldID = f.InspectionTestFieldID
+     LEFT JOIN inspectionteststrings os ON os.InspectionTestStringID = o.OptionStringID
+     WHERE f.InspectionTestID = ?
+     ORDER BY f.FieldIndex, o.InspectionTestFieldOptionID`,
+    [inspectionTestId]
   );
-  return (rows as Array<Record<string, any>>).reduce<Record<string, string[]>>((options, row) => {
+  return (rows as Array<Record<string, any>>).reduce<Array<{ id: number; name: string; key: string; type: string; options: string[] }>>((fields, row) => {
     const fieldName = String(row.fieldName || '').trim();
-    if (!fieldName) return options;
-    options[fieldName] ??= [];
-    if (!options[fieldName].includes(String(row.optionValue))) options[fieldName].push(String(row.optionValue));
-    return options;
-  }, {});
+    if (!fieldName) return fields;
+    const fieldId = Number(row.InspectionTestFieldID);
+    let field = fields.find((item) => item.id === fieldId);
+    if (!field) {
+      const fieldType = String(row.Type ?? row.FieldType ?? row.DataType ?? '').toLowerCase();
+      field = { id: fieldId, name: fieldName, key: inspectionFieldKey(fieldName), type: fieldType, options: [] };
+      fields.push(field);
+    }
+    if (row.optionValue !== null && row.optionValue !== undefined && !field.options.includes(String(row.optionValue))) {
+      field.options.push(String(row.optionValue));
+    }
+    return fields;
+  }, []);
 }
 
 async function getAssemblyDrawing(productionControlID: number, productionControlAssemblyID: number) {
@@ -1328,19 +1532,35 @@ async function getAssemblyDrawing(productionControlID: number, productionControl
   return (rows as Array<Record<string, any>>)[0] ?? null;
 }
 
-async function syncInspectionToPowerFab(assembly: Record<string, any>, inspection: z.infer<typeof fitupInspectionInput>) {
+async function syncInspectionToPowerFab(assembly: Record<string, any>, inspection: z.infer<typeof fitupInspectionInput>, inspectionType: 'VENDOR_FITUP' | 'CLIENT_FITUP') {
   const checks = inspection.checks ?? {};
   const instanceNumbers = String(checks.instanceNumber ?? '').split(',').map((value) => Number(value.trim())).filter((value, index, values) => value > 0 && values.indexOf(value) === index);
   const productionControlID = Number(assembly.productionControlID ?? 0);
   const productionControlAssemblyID = Number(assembly.productionControlAssemblyID ?? 0);
+  const inspectionTestId = inspectionType === 'CLIENT_FITUP' ? 2 : 1;
   if (!productionControlID || !productionControlAssemblyID) return;
+
+  const [configuredTestRows] = await mysqlConnection.query(
+    'SELECT StationID FROM inspectiontests WHERE InspectionTestID = ? LIMIT 1',
+    [inspectionTestId]
+  );
+  const inspectionStationId = Number((configuredTestRows as Array<Record<string, any>>)[0]?.StationID ?? (inspectionType === 'CLIENT_FITUP' ? 7 : 6));
+  const [versionRows] = await mysqlConnection.query(
+    `SELECT InspectionTestVersionID
+     FROM inspectiontestversions
+     WHERE InspectionTestID = ?
+     ORDER BY VersionDateTime DESC, InspectionTestVersionID DESC
+     LIMIT 1`,
+    [inspectionTestId]
+  );
+  const inspectionTestVersionId = Number((versionRows as Array<Record<string, any>>)[0]?.InspectionTestVersionID ?? (inspectionType === 'CLIENT_FITUP' ? 5 : 3));
 
   const [stationRows] = await mysqlConnection.query(
     `SELECT ProductionControlItemStationID, Quantity
      FROM productioncontrolitemstations
-     WHERE ProductionControlID = ? AND REPLACE(MainMark, CHAR(1), '') = ?
+    WHERE ProductionControlID = ? AND StationID = ? AND REPLACE(MainMark, CHAR(1), '') = ?
      ORDER BY ProductionControlItemStationID DESC LIMIT 1`,
-    [productionControlID, assembly.assemblyMark]
+    [productionControlID, inspectionStationId, assembly.assemblyMark]
   );
   let station = (stationRows as Array<Record<string, any>>)[0];
   const [itemRows] = await mysqlConnection.query(
@@ -1356,8 +1576,8 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
     const [stationResult] = await mysqlConnection.query(
       `INSERT INTO productioncontrolitemstations
        (ProductionControlID, MainMark, PieceMark, SequenceID, StationID, Quantity, UserID, DateCompleted, TimeCompleted, Hours, BatchID)
-       VALUES (?, ?, ?, 0, 6, ?, 0, CURDATE(), CURTIME(), 0, ?)`,
-      [productionControlID, assembly.assemblyMark, assembly.assemblyMark, Number(assembly.assemblyQuantity || 1), `${assembly.jobNumber}-${assembly.assemblyMark}`]
+       VALUES (?, ?, ?, 0, ?, ?, 0, CURDATE(), CURTIME(), 0, ?)`,
+      [productionControlID, assembly.assemblyMark, assembly.assemblyMark, inspectionStationId, Number(assembly.assemblyQuantity || 1), `${assembly.jobNumber}-${assembly.assemblyMark}`]
     );
     station = { ProductionControlItemStationID: Number((stationResult as any).insertId), Quantity: Number(assembly.assemblyQuantity || 1) };
   }
@@ -1383,14 +1603,16 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
   );
   const instanceNumberStringID = Number((instanceStringResult as any).insertId);
 
-  const testDate = checks.testPerformed ? new Date(String(checks.testPerformed)) : new Date();
+  const testDate = parseIndiaDateTime(checks.testPerformed);
   const [recordResult] = await mysqlConnection.query(
     `INSERT INTO inspectiontestrecords (
       InspectionTestID, InspectionTestVersionID, InspectionTestSubTypeID, Quantity, TestHours, TestDateTime,
       TestUpdatedDateTime, InspectionTestLocationID, TestFailed,
       ProductionControlItemStationID, ProductionControlItemStationQuantity, InstanceNumberStringID, UpdateCount
-    ) VALUES (1, 3, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 0)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 0)`,
     [
+      inspectionTestId,
+      inspectionTestVersionId,
       inspectionTestSubTypeID,
       instanceNumbers.length || Number(checks.quantity || station.Quantity || 1),
       Number(checks.testHours || 0),
@@ -1403,12 +1625,23 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
     ]
   );
   const inspectionTestRecordID = Number((recordResult as any).insertId);
+  await mysqlConnection.query(
+    `UPDATE inspectiontests
+     SET LastInspectionTestRecordID = ?, LastInspectionTestRecordDateTime = ?, UpdateCount = UpdateCount + 1
+     WHERE InspectionTestID = ?`,
+    [inspectionTestRecordID, testDate, inspectionTestId]
+  );
+  await mysqlConnection.query(
+    `UPDATE inspectiontestversions
+     SET LastInspectionTestRecordID = ?, LastInspectionTestRecordDateTime = ?
+     WHERE InspectionTestVersionID = ?`,
+    [inspectionTestRecordID, testDate, inspectionTestVersionId]
+  );
 
-  const fieldValues = [
-    [11, checks.dimensions],
-    [12, checks.grade],
-    [13, checks.welding]
-  ].filter(([, value]) => value !== undefined && String(value).trim() !== '');
+  const inspectionFields = await getInspectionFields(inspectionTestId);
+  const fieldValues = inspectionFields
+    .map((field) => [field.id, checks[field.key]] as [number, unknown])
+    .filter(([, value]) => value !== undefined && String(value).trim() !== '');
   for (const [inspectionTestFieldID, value] of fieldValues) {
     const [stringResult] = await mysqlConnection.query(
       'INSERT INTO inspectionteststrings (String) VALUES (?)',
@@ -1433,10 +1666,109 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
   }
 }
 
-async function markAssemblyPieceTrackingComplete(assembly: Record<string, any>, checks: Record<string, unknown>) {
+async function getPowerFabInspectionHistory(assembly: Record<string, any>) {
+  const [rows] = await mysqlConnection.query(
+    `SELECT itr.InspectionTestRecordID, itr.InspectionTestID, itr.TestDateTime, itr.TestUpdatedDateTime,
+            itr.TestFailed, itr.Quantity, pis.MainMark, pis.PieceMark
+     FROM inspectiontestrecords itr
+     JOIN productioncontrolitemstations pis
+       ON pis.ProductionControlItemStationID = itr.ProductionControlItemStationID
+     WHERE pis.ProductionControlID = ?
+       AND (
+         REPLACE(pis.MainMark, CHAR(1), '') = ?
+         OR EXISTS (
+           SELECT 1
+           FROM productioncontrolitems pci
+           WHERE pci.ProductionControlID = pis.ProductionControlID
+             AND pci.ProductionControlAssemblyID = ?
+             AND (
+               REPLACE(pci.MainMark, CHAR(1), '') = REPLACE(pis.MainMark, CHAR(1), '')
+               OR REPLACE(pci.PieceMark, CHAR(1), '') = REPLACE(pis.MainMark, CHAR(1), '')
+               OR REPLACE(pci.MainMark, CHAR(1), '') = REPLACE(pis.PieceMark, CHAR(1), '')
+               OR REPLACE(pci.PieceMark, CHAR(1), '') = REPLACE(pis.PieceMark, CHAR(1), '')
+             )
+         )
+       )
+     ORDER BY itr.TestDateTime DESC, itr.InspectionTestRecordID DESC`,
+    [
+      Number(assembly.productionControlID ?? 0),
+      String(assembly.assemblyMark ?? ''),
+      Number(assembly.productionControlAssemblyID ?? 0)
+    ]
+  );
+
+  const records = rows as Array<Record<string, any>>;
+  const recordIds = records.map((row) => Number(row.InspectionTestRecordID)).filter((id) => id > 0);
+  const instanceNumbersByRecord = new Map<number, number[]>();
+  if (recordIds.length) {
+    const placeholders = recordIds.map(() => '?').join(',');
+    const [instanceRows] = await mysqlConnection.query(
+      `SELECT InspectionTestRecordID, InstanceNumber
+       FROM inspectiontestrecordinstancenumbers
+       WHERE InspectionTestRecordID IN (${placeholders})
+       ORDER BY InspectionTestRecordID, InstanceNumber`,
+      recordIds
+    );
+    for (const row of instanceRows as Array<Record<string, any>>) {
+      const recordId = Number(row.InspectionTestRecordID);
+      const instanceNumber = Number(row.InstanceNumber);
+      if (!Number.isFinite(instanceNumber)) continue;
+      const numbers = instanceNumbersByRecord.get(recordId) ?? [];
+      numbers.push(instanceNumber);
+      instanceNumbersByRecord.set(recordId, numbers);
+    }
+  }
+
+  return records.map((row) => {
+    const recordId = Number(row.InspectionTestRecordID);
+    const instanceNumbers = instanceNumbersByRecord.get(recordId) ?? [];
+    return {
+      id: `powerfab-${recordId}`,
+      inspectionTestId: Number(row.InspectionTestID ?? 0),
+      result: Number(row.TestFailed ?? 0) ? 'FAIL' : 'PASS',
+      inspector: 'PowerFab',
+      remarks: 'Historical PowerFab inspection record',
+      checks: { instanceNumber: instanceNumbers.join(', '), quantity: Number(row.Quantity ?? 0) },
+      createdAt: row.TestDateTime ?? row.TestUpdatedDateTime,
+      source: 'PowerFab',
+      powerFabRecordId: recordId
+    };
+  });
+}
+
+async function hasCompletedVendorFitup(assembly: Record<string, any>) {
+  const availableInstanceNumbers = await getAvailableAssemblyInstanceNumbers(assembly);
+  const targetInstanceNumber = Number(assembly.instanceNumber ?? 0);
+  if (!availableInstanceNumbers.length && !targetInstanceNumber) return false;
+  const [rows] = await mysqlConnection.query(
+    'SELECT result, checks FROM contractor_fitup_inspections WHERE qrCode = ? AND inspectionType = ? ORDER BY createdAt DESC',
+    [assembly.qrCode, 'VENDOR_FITUP']
+  );
+  const passedInstanceNumbers = new Set<number>();
+  for (const row of rows as Array<Record<string, any>>) {
+    if (row.result !== 'PASS') continue;
+    let checks: Record<string, unknown> = {};
+    try {
+      checks = typeof row.checks === 'string' ? JSON.parse(row.checks) : (row.checks ?? {});
+    } catch {
+      checks = {};
+    }
+    parseInspectionInstanceNumbers(checks).forEach((value) => passedInstanceNumbers.add(value));
+  }
+  const powerFabInspections = await getPowerFabInspectionHistory(assembly);
+  powerFabInspections
+    .filter((inspection) => inspection.inspectionTestId === 1 && inspection.result === 'PASS')
+    .forEach((inspection) => parseInspectionInstanceNumbers(inspection.checks).forEach((value) => passedInstanceNumbers.add(value)));
+  return targetInstanceNumber > 0
+    ? passedInstanceNumbers.has(targetInstanceNumber)
+    : availableInstanceNumbers.every((value) => passedInstanceNumbers.has(value));
+}
+
+async function markAssemblyPieceTrackingComplete(assembly: Record<string, any>, checks: Record<string, unknown>, inspectionType: 'VENDOR_FITUP' | 'CLIENT_FITUP') {
   const productionControlID = Number(assembly.productionControlID ?? 0);
   const productionControlAssemblyID = Number(assembly.productionControlAssemblyID ?? 0);
   if (!productionControlID || !productionControlAssemblyID) return;
+  const stationId = inspectionType === 'CLIENT_FITUP' ? 7 : 6;
   const instanceNumbers = String(checks.instanceNumber ?? '').split(',').map((value) => Number(value.trim())).filter((value, index, values) => value > 0 && values.indexOf(value) === index);
   if (instanceNumbers.length > 0) {
     const [itemRows] = await mysqlConnection.query(
@@ -1453,24 +1785,24 @@ async function markAssemblyPieceTrackingComplete(assembly: Record<string, any>, 
        SELECT s.ProductionControlItemStationSummaryID, ?, pin.InstanceNumber, 0, 0, NULL, 0
        FROM productioncontrolitemstationsummary s
        JOIN productioncontroliteminstancenumbers pin ON pin.ProductionControlItemID = ?
-       WHERE s.ProductionControlID = ? AND s.ProductionControlItemID = ? AND s.StationID = 6`,
-      [Number(item.ProductionControlItemID), Number(item.ProductionControlItemID), productionControlID, Number(item.ProductionControlItemID)]
+      WHERE s.ProductionControlID = ? AND s.ProductionControlItemID = ? AND s.StationID = ?`,
+          [Number(item.ProductionControlItemID), Number(item.ProductionControlItemID), productionControlID, Number(item.ProductionControlItemID), stationId]
     );
     for (const instanceNumber of instanceNumbers) {
       await mysqlConnection.query(
         `UPDATE productioncontrolitemstationsummaryinstancenumbers si
          JOIN productioncontrolitemstationsummary s ON s.ProductionControlItemStationSummaryID = si.ProductionControlItemStationSummaryID
          SET si.Completed = 1, si.DateCompleted = CURDATE(), si.HasFailedInspectionTest = 0
-         WHERE s.ProductionControlID = ? AND s.ProductionControlItemID = ? AND s.StationID = 6 AND si.InstanceNumber = ?`,
-        [productionControlID, Number(item.ProductionControlItemID), instanceNumber]
+         WHERE s.ProductionControlID = ? AND s.ProductionControlItemID = ? AND s.StationID = ? AND si.InstanceNumber = ?`,
+        [productionControlID, Number(item.ProductionControlItemID), stationId, instanceNumber]
       );
     }
     await mysqlConnection.query(
       `UPDATE productioncontrolitemstationsummary s
        SET s.QuantityCompleted = (SELECT COUNT(*) FROM productioncontrolitemstationsummaryinstancenumbers si WHERE si.ProductionControlItemStationSummaryID = s.ProductionControlItemStationSummaryID AND si.Completed = 1),
            s.LastDateCompleted = CURDATE(), s.FailedInspectionTestQuantity = 0
-       WHERE s.ProductionControlID = ? AND s.ProductionControlItemID = ? AND s.StationID = 6`,
-      [productionControlID, Number(item.ProductionControlItemID)]
+      WHERE s.ProductionControlID = ? AND s.ProductionControlItemID = ? AND s.StationID = ?`,
+          [productionControlID, Number(item.ProductionControlItemID), stationId]
     );
   }
 }
@@ -1652,16 +1984,56 @@ app.post('/api/assemblies/:qrCode/fitup-inspections', async (request, response) 
   if (!input.success) return response.status(400).json({ error: 'Invalid fit-up inspection data.', details: input.error.flatten() });
   const assembly = await contractorCanAccessQr(contractorId, qrCode);
   if (!assembly) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
-  if (!(await contractorCanSubmitFitupInspection(contractorId))) return response.status(403).json({ error: 'Fit-up inspection permission is not granted in PowerFab.' });
+  const inspectionType = await getFitupInspectionRole(contractorId);
+  if (!inspectionType) return response.status(403).json({ error: 'Fit-up inspection permission is not granted in PowerFab.' });
+  if (inspectionType === 'CLIENT_FITUP' && !(await hasCompletedVendorFitup(assembly))) {
+    return response.status(403).json({ error: 'Client/Fit-up Inspection is available only after Vendor/Fit-up Inspection is completed.' });
+  }
+
+  const savedChecks = {
+    ...(input.data.checks ?? {}),
+    ...(assembly.instanceNumber ? { instanceNumber: String(assembly.instanceNumber) } : {})
+  };
+  const inspectionData = { ...input.data, checks: savedChecks };
+  const instanceNumbers = parseInspectionInstanceNumbers(savedChecks);
+  const powerFabInspections = await getPowerFabInspectionHistory(assembly);
+  const [previousRows] = await mysqlConnection.query(
+    'SELECT result, checks FROM contractor_fitup_inspections WHERE qrCode = ? AND inspectionType = ? ORDER BY createdAt DESC',
+    [qrCode, inspectionType]
+  );
+  const passedInstanceNumbers = new Set<number>();
+  (previousRows as Array<Record<string, any>>).forEach((row) => {
+    if (row.result !== 'PASS') return;
+    let checks: Record<string, unknown> = {};
+    try {
+      checks = typeof row.checks === 'string' ? JSON.parse(row.checks) : (row.checks ?? {});
+    } catch {
+      checks = {};
+    }
+    parseInspectionInstanceNumbers(checks).forEach((value) => passedInstanceNumbers.add(value));
+  });
+  if (inspectionType === 'VENDOR_FITUP') {
+    powerFabInspections.forEach((inspection) => {
+      if (inspection.result !== 'PASS') return;
+      parseInspectionInstanceNumbers(inspection.checks).forEach((value) => passedInstanceNumbers.add(value));
+    });
+  }
+  const alreadyPassed = instanceNumbers.filter((value) => passedInstanceNumbers.has(value));
+  if (alreadyPassed.length) {
+    return response.status(409).json({
+      error: `Instance number${alreadyPassed.length === 1 ? '' : 's'} ${alreadyPassed.join(', ')} already passed inspection and cannot be scanned again.`
+    });
+  }
 
   const [result] = await mysqlConnection.query(
-    `INSERT INTO contractor_fitup_inspections (contractorId, qrCode, jobNumber, assemblyMark, result, inspector, remarks, checks)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [contractorId, qrCode, assembly.jobNumber, assembly.assemblyMark, input.data.result, input.data.inspector, input.data.remarks ?? null, JSON.stringify(input.data.checks ?? {})]
+    `INSERT INTO contractor_fitup_inspections (contractorId, qrCode, jobNumber, assemblyMark, inspectionType, result, inspector, remarks, checks)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [contractorId, qrCode, assembly.jobNumber, assembly.assemblyMark, inspectionType, input.data.result, input.data.inspector, input.data.remarks ?? null, JSON.stringify(savedChecks)]
   );
   try {
-    await syncInspectionToPowerFab(assembly, input.data);
-    if (input.data.result === 'PASS') await markAssemblyPieceTrackingComplete(assembly, input.data.checks ?? {});
+    await syncInspectionToPowerFab(assembly, inspectionData, inspectionType);
+    if (inspectionData.result === 'PASS') await markAssemblyPieceTrackingComplete(assembly, savedChecks, inspectionType);
+    await reconcileFitupInspectionStatus(Number(assembly.productionControlID ?? 0));
   } catch (error) {
     console.error('Unable to sync inspection to PowerFab tables', error);
     return response.status(500).json({ error: 'Inspection was saved in the portal but could not be written to PowerFab.' });
@@ -1675,9 +2047,14 @@ app.get('/api/assemblies/:qrCode/fitup-inspections', async (request, response) =
   if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
   const assembly = await contractorCanAccessQr(contractorId, qrCode);
   if (!assembly) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
-  const [rows] = await mysqlConnection.query('SELECT id, result, inspector, remarks, checks, createdAt FROM contractor_fitup_inspections WHERE qrCode = ? ORDER BY createdAt DESC', [qrCode]);
-  const availableInstanceNumbers = await getAssemblyInstanceNumbers(assembly.productionControlID, assembly.productionControlAssemblyID);
+  const inspectionType = await getFitupInspectionRole(contractorId);
+  if (!inspectionType) return response.status(403).json({ error: 'Fit-up inspection permission is not granted in PowerFab.' });
+  const [rows] = await mysqlConnection.query('SELECT id, inspectionType, result, inspector, remarks, checks, createdAt FROM contractor_fitup_inspections WHERE qrCode = ? ORDER BY createdAt DESC', [qrCode]);
+  const powerFabInspections = await getPowerFabInspectionHistory(assembly);
+  const availableInstanceNumbers = await getAvailableAssemblyInstanceNumbers(assembly);
+  const targetInstanceNumber = Number(assembly.instanceNumber ?? 0);
   const completedInstanceNumbers = new Set<number>();
+  const passedInstanceNumbers = new Set<number>();
   const inspections = (rows as Array<Record<string, any>>).map((row) => {
     let checks: Record<string, unknown> = {};
     try {
@@ -1685,22 +2062,238 @@ app.get('/api/assemblies/:qrCode/fitup-inspections', async (request, response) =
     } catch {
       checks = {};
     }
-    String(checks.instanceNumber ?? '')
-      .split(',')
-      .map((value) => Number(value.trim()))
-      .filter((value, index, values) => Number.isInteger(value) && value > 0 && values.indexOf(value) === index)
-      .forEach((value) => completedInstanceNumbers.add(value));
+    const instanceNumbers = parseInspectionInstanceNumbers(checks);
+    if (row.inspectionType === inspectionType) {
+      instanceNumbers.forEach((value) => completedInstanceNumbers.add(value));
+      if (row.result === 'PASS') instanceNumbers.forEach((value) => passedInstanceNumbers.add(value));
+    }
     return { ...row, checks };
   });
+  const allInspections = [...inspections, ...powerFabInspections].sort((first, second) => {
+    const firstRecord = first as Record<string, any>;
+    const secondRecord = second as Record<string, any>;
+    return new Date(String(secondRecord.createdAt ?? 0)).getTime() - new Date(String(firstRecord.createdAt ?? 0)).getTime();
+  });
+  if (inspectionType === 'VENDOR_FITUP') powerFabInspections.forEach((inspection) => {
+    const instanceNumbers = parseInspectionInstanceNumbers(inspection.checks);
+    instanceNumbers.forEach((value) => {
+      completedInstanceNumbers.add(value);
+      if (inspection.result === 'PASS') passedInstanceNumbers.add(value);
+    });
+  });
   const completed = [...completedInstanceNumbers].filter((value) => availableInstanceNumbers.includes(value));
+  const passed = [...passedInstanceNumbers].filter((value) => availableInstanceNumbers.includes(value));
+  const inspectionComplete = targetInstanceNumber > 0
+    ? passedInstanceNumbers.has(targetInstanceNumber)
+    : availableInstanceNumbers.length > 0 && availableInstanceNumbers.every((value) => passedInstanceNumbers.has(value));
   response.json({
-    inspections,
+    inspections: allInspections,
     availableInstanceNumbers,
     completedInstanceNumbers: completed,
-    inspectionComplete: availableInstanceNumbers.length > 0 && availableInstanceNumbers.every((value) => completedInstanceNumbers.has(value))
+    passedInstanceNumbers: passed,
+    inspectionComplete,
+    instanceNumber: targetInstanceNumber || null
   });
 });
 
+async function getShippingEligibleAssemblies(jobNumber: string) {
+  const [jobRows] = await mysqlConnection.query(
+    'SELECT ProductionControlID FROM productioncontroljobs WHERE JobNumber = ? LIMIT 1',
+    [jobNumber]
+  );
+  const productionControlID = Number((jobRows as Array<Record<string, any>>)[0]?.ProductionControlID ?? 0);
+  if (!productionControlID) return [];
+  const [assemblyRows] = await mysqlConnection.query(
+    `SELECT ProductionControlAssemblyID, REPLACE(MainMark, CHAR(1), '') AS assemblyMark, AssemblyQuantity, AssemblyWeightEach
+     FROM productioncontrolassemblies WHERE ProductionControlID = ? ORDER BY MainMark, ProductionControlAssemblyID`,
+    [productionControlID]
+  );
+  const eligible = [] as Array<{ qrCode: string; assemblyMark: string; quantity: number; weight: number; passedInstances: number[] }>;
+  for (const row of assemblyRows as Array<Record<string, any>>) {
+    const assemblyId = Number(row.ProductionControlAssemblyID ?? 0);
+    if (!assemblyId) continue;
+    const assembly = {
+      qrCode: buildAssemblyQrCode(jobNumber, assemblyId), jobNumber, productionControlID,
+      productionControlAssemblyID: assemblyId, assemblyMark: String(row.assemblyMark ?? '').trim(),
+      assemblyQuantity: Number(row.AssemblyQuantity ?? 0), assemblyWeightEach: Number(row.AssemblyWeightEach ?? 0)
+    };
+    const availableInstances = await getAvailableAssemblyInstanceNumbers(assembly);
+    if (!availableInstances.length) continue;
+    const passedInstances = new Set<number>();
+    const [inspectionRows] = await mysqlConnection.query(
+      'SELECT result, checks FROM contractor_fitup_inspections WHERE jobNumber = ? AND assemblyMark = ? AND result = \'PASS\'',
+      [jobNumber, assembly.assemblyMark]
+    );
+    for (const inspection of inspectionRows as Array<Record<string, any>>) {
+      try { parseInspectionInstanceNumbers(typeof inspection.checks === 'string' ? JSON.parse(inspection.checks) : (inspection.checks ?? {})).forEach((value) => passedInstances.add(value)); } catch { /* ignore malformed historical checks */ }
+    }
+    for (const inspection of await getPowerFabInspectionHistory(assembly)) {
+      if (inspection.result === 'PASS') parseInspectionInstanceNumbers(inspection.checks).forEach((value) => passedInstances.add(value));
+    }
+    if (!availableInstances.every((value) => passedInstances.has(value))) continue;
+    eligible.push({ qrCode: assembly.qrCode, assemblyMark: assembly.assemblyMark || 'Unknown Assembly', quantity: availableInstances.length, weight: Number((assembly.assemblyWeightEach * availableInstances.length).toFixed(3)), passedInstances: availableInstances });
+  }
+  return eligible;
+}
+
+app.get('/api/shipping-tickets', async (request, response) => {
+  const jobNumber = String(request.query.job || '').trim();
+  const contractorId = getContractorId(request);
+  if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
+  if (!jobNumber) return response.status(400).json({ error: 'job query parameter is required.' });
+  if (!(await contractorCanAccessJob(contractorId, jobNumber))) return response.status(403).json({ error: 'Project is not assigned to this contractor.' });
+  try {
+    const eligible = await getShippingEligibleAssemblies(jobNumber);
+    const [ticketRows] = await mysqlConnection.query(
+      `SELECT st.id, st.ticketNumber, st.shippingDate, st.destination, st.remarks, st.createdAt,
+              COUNT(sti.id) AS assemblyCount, COALESCE(SUM(sti.quantity), 0) AS quantity, COALESCE(SUM(sti.weight), 0) AS weight
+       FROM shipping_tickets st LEFT JOIN shipping_ticket_items sti ON sti.shippingTicketId = st.id
+       WHERE st.jobNumber = ? GROUP BY st.id ORDER BY st.createdAt DESC`, [jobNumber]
+    );
+    response.json({ eligibleAssemblies: eligible, tickets: ticketRows });
+  } catch (error) {
+    console.error('Unable to load shipping tickets', error);
+    response.status(500).json({ error: 'Unable to load shipping tickets.' });
+  }
+});
+
+app.post('/api/shipping-tickets', async (request, response) => {
+  const input = shippingTicketInput.safeParse(request.body);
+  const contractorId = getContractorId(request);
+  if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
+  if (!input.success) return response.status(400).json({ error: 'Select at least one inspected assembly.' });
+  const jobNumber = String(request.query.job || '').trim();
+  if (!jobNumber) return response.status(400).json({ error: 'job query parameter is required.' });
+  if (!(await contractorCanAccessJob(contractorId, jobNumber))) return response.status(403).json({ error: 'Project is not assigned to this contractor.' });
+  try {
+    const requestedCodes = [...new Set(input.data.qrCodes)];
+    const eligible = await getShippingEligibleAssemblies(jobNumber);
+    const selected = eligible.filter((assembly) => requestedCodes.includes(assembly.qrCode));
+    if (selected.length !== requestedCodes.length) return response.status(400).json({ error: 'One or more selected assemblies have not completed a PASS inspection.' });
+    const [shippedRows] = await mysqlConnection.query(
+      `SELECT sti.qrCode FROM shipping_ticket_items sti JOIN shipping_tickets st ON st.id = sti.shippingTicketId
+       WHERE st.jobNumber = ? AND sti.qrCode IN (${requestedCodes.map(() => '?').join(',')})`,
+      [jobNumber, ...requestedCodes]
+    );
+    if ((shippedRows as Array<Record<string, any>>).length) return response.status(409).json({ error: 'One or more selected assemblies are already assigned to a shipping ticket.' });
+    const ticketNumber = `ST-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomBytes(3).toString('hex').toUpperCase()}`;
+    const [ticketResult] = await mysqlConnection.query(
+      'INSERT INTO shipping_tickets (ticketNumber, jobNumber, contractorId, shippingDate, destination, remarks) VALUES (?, ?, ?, ?, ?, ?)',
+      [ticketNumber, jobNumber, contractorId, input.data.shippingDate || null, input.data.destination || null, input.data.remarks || null]
+    );
+    const shippingTicketId = Number((ticketResult as any).insertId);
+    for (const assembly of selected) {
+      await mysqlConnection.query(
+        'INSERT INTO shipping_ticket_items (shippingTicketId, qrCode, assemblyMark, quantity, weight) VALUES (?, ?, ?, ?, ?)',
+        [shippingTicketId, assembly.qrCode, assembly.assemblyMark, assembly.quantity, assembly.weight]
+      );
+    }
+    response.status(201).json({ saved: true, ticketNumber, assemblyCount: selected.length });
+  } catch (error) {
+    console.error('Unable to create shipping ticket', error);
+    response.status(500).json({ error: 'Unable to create shipping ticket.' });
+  }
+});
+const optionalPaintNumber = (schema:z.ZodTypeAny) => z.preprocess(value => value === '' || value === null || value === undefined ? undefined : value, schema.optional());
+const paintLoadInput = z.object({ loadNumber:z.string().trim().min(1).max(255), topTextDescription:z.string().trim().max(255).optional(), shippedFrom:z.string().trim().max(255).optional(), destinationGroupId:optionalPaintNumber(z.coerce.number().int().positive()), plannedShipDate:z.string().trim().max(10).optional(), capacity:optionalPaintNumber(z.coerce.number().finite().nonnegative()), trailerNumber:z.string().trim().max(255).optional(), carrier:z.string().trim().max(255).optional(), driverName:z.string().trim().max(255).optional(), pickupLocation:z.string().trim().max(255).optional(), receivingLocation:z.string().trim().max(255).optional() });
+const paintLoadItemsInput = z.object({ qrCodes:z.array(z.string().trim().min(1)).min(1).max(500) });
+async function queryClientPaintEligible(jobNumber:string, _loadId=0) {
+  const [jr]=await mysqlConnection.query('SELECT ProductionControlID, Comment2 FROM productioncontroljobs WHERE JobNumber=? LIMIT 1',[jobNumber]);
+  const pdc=Number((jr as any[])[0]?.ProductionControlID||0),prefix=String((jr as any[])[0]?.Comment2||jobNumber).trim(); if(!pdc)return [];
+  const [ar]=await mysqlConnection.query("SELECT ProductionControlAssemblyID,REPLACE(MainMark,CHAR(1),'') assemblyMark,AssemblyQuantity,AssemblyWeightEach FROM productioncontrolassemblies WHERE ProductionControlID=?",[pdc]);
+  const out:any[]=[];
+  for(const r of ar as any[]){
+    const assemblyId=Number(r.ProductionControlAssemblyID),assemblyMark=String(r.assemblyMark||'').trim(); if(!assemblyId||!assemblyMark)continue;
+    const assembly={qrCode:buildAssemblyQrCode(jobNumber,assemblyId),jobNumber,productionControlID:pdc,productionControlAssemblyID:assemblyId,assemblyMark,assemblyQuantity:Number(r.AssemblyQuantity||0),assemblyWeightEach:Number(r.AssemblyWeightEach||0)};
+    const [descriptionRows]=await mysqlConnection.query("SELECT COALESCE(d.Description, pci.Remark, '') AS description FROM productioncontrolitems pci LEFT JOIN drawings d ON d.DrawingID=pci.DrawingID WHERE pci.ProductionControlID=? AND pci.ProductionControlAssemblyID=? ORDER BY pci.ProductionControlItemID LIMIT 1",[pdc,assemblyId]);const description=String((descriptionRows as any[])[0]?.description||'');const available=await getAvailableAssemblyInstanceNumbers(assembly),passed=new Set<number>();
+    const [completedRows]=await mysqlConnection.query(`SELECT DISTINCT si.InstanceNumber
+      FROM productioncontrolitemstationsummaryinstancenumbers si
+      JOIN productioncontrolitemstationsummary s ON s.ProductionControlItemStationSummaryID=si.ProductionControlItemStationSummaryID
+      JOIN productioncontrolitems pci ON pci.ProductionControlItemID=s.ProductionControlItemID
+      WHERE s.ProductionControlID=? AND pci.ProductionControlAssemblyID=? AND s.StationID=7 AND si.Completed=1`,[pdc,assemblyId]);
+    for(const x of completedRows as any[]){const instanceNumber=Number(x.InstanceNumber);if(Number.isInteger(instanceNumber)&&instanceNumber>0)passed.add(instanceNumber)}
+    const [ir]=await mysqlConnection.query("SELECT checks FROM contractor_fitup_inspections WHERE jobNumber=? AND assemblyMark=? AND inspectionType='CLIENT_FITUP' AND result='PASS'",[jobNumber,assemblyMark]);
+    for(const x of ir as any[]){try{parseInspectionInstanceNumbers(typeof x.checks==='string'?JSON.parse(x.checks):x.checks||{}).forEach(n=>passed.add(n))}catch{}}
+    for(const x of await getPowerFabInspectionHistory(assembly))if(x.inspectionTestId===2&&x.result==='PASS')parseInspectionInstanceNumbers(x.checks).forEach(n=>passed.add(n));
+    for(const instanceNumber of available.filter(n=>passed.has(n))){
+      const [assigned]=await mysqlConnection.query(`SELECT 1 FROM productioncontrolitemtrucks pit JOIN productioncontrolitemtruckinstancenumbers pi ON pi.ProductionControlItemTruckID=pit.ProductionControlItemTruckID WHERE pit.ProductionControlID=? AND REPLACE(pit.MainMark,CHAR(1),'')=? AND pi.InstanceNumber=? LIMIT 1`,[pdc,assemblyMark,instanceNumber]);
+      if((assigned as any[]).length)continue;
+      out.push({qrCode:buildAssemblyQrCode(jobNumber,`${assemblyId}-${instanceNumber}`),assemblyId,assemblyMark,instanceNumber,instanceMark:`${prefix}-${assemblyMark}-${instanceNumber}`,description,quantity:1,weight:assembly.assemblyWeightEach});
+    }
+  }
+  return out;
+}
+async function markPaintInstancesComplete(productionControlID:number,assemblyId:number,instanceNumbers:number[]){const [items]=await mysqlConnection.query('SELECT ProductionControlItemID FROM productioncontrolitems WHERE ProductionControlID=? AND ProductionControlAssemblyID=? AND InstanceTracking=3 ORDER BY ProductionControlItemID LIMIT 1',[productionControlID,assemblyId]);const itemId=Number((items as any[])[0]?.ProductionControlItemID||0);if(!itemId)return;await mysqlConnection.query(`INSERT IGNORE INTO productioncontrolitemstationsummaryinstancenumbers (ProductionControlItemStationSummaryID,ProductionControlItemID,InstanceNumber,Completed,Hours,DateCompleted,HasFailedInspectionTest) SELECT s.ProductionControlItemStationSummaryID,?,pin.InstanceNumber,0,0,NULL,0 FROM productioncontrolitemstationsummary s JOIN productioncontroliteminstancenumbers pin ON pin.ProductionControlItemID=? WHERE s.ProductionControlID=? AND s.ProductionControlItemID=? AND s.StationID=8`,[itemId,itemId,productionControlID,itemId]);for(const instanceNumber of instanceNumbers)await mysqlConnection.query(`UPDATE productioncontrolitemstationsummaryinstancenumbers si JOIN productioncontrolitemstationsummary s ON s.ProductionControlItemStationSummaryID=si.ProductionControlItemStationSummaryID SET si.Completed=1,si.DateCompleted=CURDATE(),si.HasFailedInspectionTest=0 WHERE s.ProductionControlID=? AND s.ProductionControlItemID=? AND s.StationID=8 AND si.InstanceNumber=?`,[productionControlID,itemId,instanceNumber]);await mysqlConnection.query(`UPDATE productioncontrolitemstationsummary s SET s.QuantityCompleted=(SELECT COUNT(*) FROM productioncontrolitemstationsummaryinstancenumbers si WHERE si.ProductionControlItemStationSummaryID=s.ProductionControlItemStationSummaryID AND si.Completed=1),s.LastDateCompleted=CURDATE(),s.FailedInspectionTestQuantity=0 WHERE s.ProductionControlID=? AND s.ProductionControlItemID=? AND s.StationID=8`,[productionControlID,itemId]);}
+async function reconcilePaintLoadStatus(loadId:number){
+  await mysqlConnection.query(`UPDATE productioncontrolitemstationsummaryinstancenumbers si
+    JOIN productioncontrolitemstationsummary s ON s.ProductionControlItemStationSummaryID=si.ProductionControlItemStationSummaryID
+    JOIN productioncontrolitemtruckinstancenumbers pi ON pi.ProductionControlItemID=s.ProductionControlItemID AND pi.InstanceNumber=si.InstanceNumber
+    JOIN productioncontrolitemtrucks pit ON pi.ProductionControlItemTruckID=pit.ProductionControlItemTruckID
+    SET si.Completed=1,si.DateCompleted=CURDATE(),si.HasFailedInspectionTest=0
+    WHERE pit.TruckID=? AND s.StationID=8`,[loadId]);
+  await mysqlConnection.query(`UPDATE productioncontrolitemstationsummary s
+    JOIN productioncontrolitemtruckinstancenumbers pi ON pi.ProductionControlItemID=s.ProductionControlItemID
+    JOIN productioncontrolitemtrucks pit ON pi.ProductionControlItemTruckID=pit.ProductionControlItemTruckID
+    SET s.QuantityCompleted=(SELECT COUNT(*) FROM productioncontrolitemstationsummaryinstancenumbers si WHERE si.ProductionControlItemStationSummaryID=s.ProductionControlItemStationSummaryID AND si.Completed=1),s.LastDateCompleted=CURDATE(),s.FailedInspectionTestQuantity=0
+    WHERE pit.TruckID=? AND s.StationID=8`,[loadId]);
+}
+async function reconcileFitupInspectionStatus(productionControlId:number){
+  await mysqlConnection.query(`UPDATE productioncontrolitemstationsummaryinstancenumbers si
+    JOIN productioncontrolitemstationsummary s ON s.ProductionControlItemStationSummaryID=si.ProductionControlItemStationSummaryID
+    JOIN productioncontrolitems pci ON pci.ProductionControlItemID=s.ProductionControlItemID
+    JOIN inspectiontestrecords itr ON itr.InspectionTestID IN (1,2) AND itr.TestFailed=0
+    JOIN productioncontrolitemstations pis ON pis.ProductionControlItemStationID=itr.ProductionControlItemStationID
+    JOIN inspectionteststrings its ON its.InspectionTestStringID=itr.InstanceNumberStringID
+    SET si.Completed=1,si.DateCompleted=COALESCE(si.DateCompleted,CURDATE()),si.HasFailedInspectionTest=0
+    WHERE pci.ProductionControlID=?
+      AND REPLACE(pci.MainMark,CHAR(1),'')=REPLACE(pis.MainMark,CHAR(1),'')
+      AND s.StationID=CASE itr.InspectionTestID WHEN 1 THEN 6 WHEN 2 THEN 7 END
+      AND FIND_IN_SET(CAST(si.InstanceNumber AS CHAR),REPLACE(its.String,' ',''))>0`,[productionControlId]);
+  await mysqlConnection.query(`UPDATE productioncontrolitemstationsummary s
+    SET s.QuantityCompleted=(SELECT COUNT(*) FROM productioncontrolitemstationsummaryinstancenumbers si WHERE si.ProductionControlItemStationSummaryID=s.ProductionControlItemStationSummaryID AND si.Completed=1),
+        s.LastDateCompleted=CASE WHEN s.QuantityCompleted>0 THEN CURDATE() ELSE s.LastDateCompleted END,
+        s.FailedInspectionTestQuantity=0
+    WHERE s.ProductionControlID=? AND s.StationID IN (6,7)`,[productionControlId]);
+}
+function paintAccess(request:express.Request){const job=String(request.query.job||'').trim(),cid=getContractorId(request);return {job,cid}}
+async function clientPaintEligible(jobNumber:string,loadId=0){try{return await queryClientPaintEligible(jobNumber,loadId)}catch(error){console.error('Unable to load eligible paint assemblies',error);return []}}
+app.get('/api/paint-loads',async(request,response)=>{
+  const {job,cid}=paintAccess(request); if(!cid)return response.status(401).json({error:'Contractor login required.'});
+  if(!job||!(await contractorCanAccessJob(cid,job)))return response.status(403).json({error:'Project is not assigned to this contractor.'});
+  try{
+    const [jr]=await mysqlConnection.query('SELECT ProductionControlID,Comment2 FROM productioncontroljobs WHERE JobNumber=? LIMIT 1',[job]);
+    const pdc=Number((jr as any[])[0]?.ProductionControlID||0),load=Number(request.query.load||0);
+    const [loads]=await mysqlConnection.query('SELECT TruckID,TruckNumber,TrailerNumber,Carrier,Capacity,LoadCategory1,LoadCategory2,LoadCategory3,Shipped,ShippedDate,ShippedFrom,ShippingDestinationGroupID,PlannedShipDate,TopText,QuantityAssigned,AssignedWeight FROM productioncontroltrucks WHERE ProductionControlID=? ORDER BY TruckID DESC',[pdc]);
+    const [topTexts]=await mysqlConnection.query('SELECT Description,TopText FROM productioncontrolshippingtoptexts ORDER BY Description');
+    const [destinations]=await mysqlConnection.query('SELECT ShippingDestinationGroupID,DestinationGroup FROM shippingdestinationgroups WHERE Active=1 ORDER BY DestinationGroup');
+    const [shippingRoutes]=await mysqlConnection.query(`SELECT sr.ShippingRouteID,sr.Description AS routeName,srd.ShippingRouteDestinationID,srd.PositionInRoute,sdg.ShippingDestinationGroupID,sdg.DestinationGroup,COALESCE(f.FirmID,0) AS FirmID,COALESCE(f.Name,'') AS firmName,COALESCE(fa.FirmAddressID,0) AS FirmAddressID,COALESCE(fa.Description,'') AS addressName,COALESCE(fa.Address1,'') AS address1 FROM shippingroutes sr JOIN shippingroutedestinations srd ON srd.ShippingRouteID=sr.ShippingRouteID JOIN shippingdestinationgroups sdg ON sdg.ShippingDestinationGroupID=srd.ShippingDestinationGroupID LEFT JOIN shippingroutedestinationfirms srdf ON srdf.ShippingRouteDestinationID=srd.ShippingRouteDestinationID AND srdf.IsPrimary=1 LEFT JOIN firms f ON f.FirmID=srdf.FirmID LEFT JOIN firmaddresses fa ON fa.FirmAddressID=f.DefaultShipToAddressID WHERE sr.ProductionControlID=? ORDER BY sr.ShippingRouteID,srd.PositionInRoute,srd.ShippingRouteDestinationID`,[pdc]);
+    const [loadTrackingSettings]=await mysqlConnection.query("SELECT VariableName,StringValue FROM variablescompanystandardsproductioncontrol WHERE VariableName REGEXP '^(TrailerNumber|Carrier|LoadCategory1|LoadCategory2|LoadCategory3)_(ShowField|Title|Required|RestrictToList)$'");
+    const [loadTrackingPresets]=await mysqlConnection.query("SELECT FieldName,Value,SecondaryValue,ThirdValue FROM productioncontrolfieldvalues WHERE FieldName IN ('TrailerNumber','LoadCategory2','LoadCategory3') ORDER BY FieldName,Value");
+    const [assignedAssemblies]=load?await mysqlConnection.query("SELECT REPLACE(pit.MainMark,CHAR(1),'') AS MainMark,REPLACE(pit.PieceMark,CHAR(1),'') AS PieceMark,pi.InstanceNumber,COALESCE(a.AssemblyWeightEach,0) AS Weight FROM productioncontrolitemtrucks pit JOIN productioncontrolitemtruckinstancenumbers pi ON pi.ProductionControlItemTruckID=pit.ProductionControlItemTruckID LEFT JOIN productioncontrolitems pci ON pci.ProductionControlItemID=pi.ProductionControlItemID LEFT JOIN productioncontrolassemblies a ON a.ProductionControlAssemblyID=pci.ProductionControlAssemblyID WHERE pit.ProductionControlID=? AND pit.TruckID=? ORDER BY pit.MainMark,pi.InstanceNumber",[pdc,load]):[[]];
+    if(load) await reconcilePaintLoadStatus(load);
+    response.json({loads,topTexts,destinations,shippingRoutes,loadTrackingSettings,loadTrackingPresets,jobPrefix:String((jr as any[])[0]?.Comment2||job).trim(),assignedAssemblies,eligibleAssemblies:load?await clientPaintEligible(job,load):[]});
+  }catch(error){console.error('Unable to load PowerFab loads',error);response.status(500).json({error:'Unable to load PowerFab loads.'})}
+});
+app.get('/api/paint-loads',async(request,response)=>{const {job,cid}=paintAccess(request);if(!cid)return response.status(401).json({error:'Contractor login required.'});if(!job||!(await contractorCanAccessJob(cid,job)))return response.status(403).json({error:'Project is not assigned to this contractor.'});try{const [jr]=await mysqlConnection.query('SELECT ProductionControlID,Comment2 FROM productioncontroljobs WHERE JobNumber=? LIMIT 1',[job]);const pdc=Number((jr as any[])[0]?.ProductionControlID||0);const [loads]=await mysqlConnection.query('SELECT TruckID,TruckNumber,TrailerNumber,Carrier,Capacity,LoadCategory1,LoadCategory2,LoadCategory3,ShippedFrom,ShippingDestinationGroupID,PlannedShipDate,TopText,QuantityAssigned,AssignedWeight FROM productioncontroltrucks WHERE ProductionControlID=? ORDER BY TruckID DESC',[pdc]);const [topTexts]=await mysqlConnection.query('SELECT Description,TopText FROM productioncontrolshippingtoptexts ORDER BY Description');const [destinations]=await mysqlConnection.query('SELECT ShippingDestinationGroupID,DestinationGroup FROM shippingdestinationgroups WHERE Active=1 ORDER BY DestinationGroup');const [shippingRoutes]=await mysqlConnection.query(`SELECT sr.ShippingRouteID,sr.Description AS routeName,srd.ShippingRouteDestinationID,srd.PositionInRoute,sdg.ShippingDestinationGroupID,sdg.DestinationGroup,COALESCE(f.FirmID,0) AS FirmID,COALESCE(f.Name,'') AS firmName,COALESCE(fa.FirmAddressID,0) AS FirmAddressID,COALESCE(fa.Description,'') AS addressName,COALESCE(fa.Address1,'') AS address1 FROM shippingroutes sr JOIN shippingroutedestinations srd ON srd.ShippingRouteID=sr.ShippingRouteID JOIN shippingdestinationgroups sdg ON sdg.ShippingDestinationGroupID=srd.ShippingDestinationGroupID LEFT JOIN shippingroutedestinationfirms srdf ON srdf.ShippingRouteDestinationID=srd.ShippingRouteDestinationID AND srdf.IsPrimary=1 LEFT JOIN firms f ON f.FirmID=srdf.FirmID LEFT JOIN firmaddresses fa ON fa.FirmAddressID=f.DefaultShipToAddressID WHERE sr.ProductionControlID=? ORDER BY sr.ShippingRouteID,srd.PositionInRoute,srd.ShippingRouteDestinationID`,[pdc]);const [loadTrackingSettings]=await mysqlConnection.query("SELECT VariableName,StringValue FROM variablescompanystandardsproductioncontrol WHERE VariableName REGEXP '^(TrailerNumber|Carrier|LoadCategory1|LoadCategory2|LoadCategory3)_(ShowField|Title|Required|RestrictToList)$'");const [loadTrackingPresets]=await mysqlConnection.query("SELECT FieldName,Value,SecondaryValue,ThirdValue FROM productioncontrolfieldvalues WHERE FieldName IN ('TrailerNumber','LoadCategory2','LoadCategory3') ORDER BY FieldName,Value");const load=Number(request.query.load||0);const jobPrefix=String((jr as any[])[0]?.Comment2||job).trim();const [assignedAssemblies]=load?await mysqlConnection.query('SELECT REPLACE(pit.MainMark,CHAR(1),CONCAT()) AS MainMark,REPLACE(pit.PieceMark,CHAR(1),CONCAT()) AS PieceMark,pi.InstanceNumber,COALESCE(a.AssemblyWeightEach,0) AS Weight FROM productioncontrolitemtrucks pit JOIN productioncontrolitemtruckinstancenumbers pi ON pi.ProductionControlItemTruckID=pit.ProductionControlItemTruckID LEFT JOIN productioncontrolitems pci ON pci.ProductionControlItemID=pi.ProductionControlItemID LEFT JOIN productioncontrolassemblies a ON a.ProductionControlAssemblyID=pci.ProductionControlAssemblyID WHERE pit.ProductionControlID=? AND pit.TruckID=? ORDER BY pit.MainMark,pi.InstanceNumber',[pdc,load]):[[]];response.json({loads,topTexts,destinations,shippingRoutes,loadTrackingSettings,loadTrackingPresets,jobPrefix,assignedAssemblies,eligibleAssemblies:load?await clientPaintEligible(job,load):[]})}catch(e){console.error(e);response.status(500).json({error:'Unable to load PowerFab loads.'})}});
+app.post('/api/paint-loads',async(request,response)=>{const input=paintLoadInput.safeParse(request.body);const {job,cid}=paintAccess(request);if(!cid)return response.status(401).json({error:'Contractor login required.'});if(!input.success)return response.status(400).json({error:'Load number is required.'});if(!job||!(await contractorCanAccessJob(cid,job)))return response.status(403).json({error:'Project is not assigned to this contractor.'});try{const [jr]=await mysqlConnection.query('SELECT ProductionControlID,Comment2 FROM productioncontroljobs WHERE JobNumber=? LIMIT 1',[job]);const pdc=Number((jr as any[])[0]?.ProductionControlID||0);const [tr]=await mysqlConnection.query('SELECT TopText FROM productioncontrolshippingtoptexts WHERE Description=? LIMIT 1',[input.data.topTextDescription||'Painting']);const top=(tr as any[])[0]?.TopText||'';const [r]=await mysqlConnection.query("INSERT INTO productioncontroltrucks (ProductionControlID,TruckNumber,TrailerNumber,Carrier,Capacity,LoadCategory1,LoadCategory2,LoadCategory3,ShippedFrom,ShippingDestinationGroupID,PlannedShipDate,TopText,Shipped,QuantityAssigned,AssignedLength,AssignedSquareMeters,AssignedWeight,AssignedSurfaceArea,QuantityLoaded,LoadedLength,LoadedSquareMeters,LoadedWeight,LoadedSurfaceArea,QuantityReturned,ReturnedLength,ReturnedSquareMeters,ReturnedWeight,ReturnedSurfaceArea,RecalculateTruckTotals) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1)",[pdc,input.data.loadNumber,input.data.trailerNumber||null,input.data.carrier||null,input.data.capacity??57320.19,input.data.driverName||null,input.data.pickupLocation||null,input.data.receivingLocation||null,input.data.shippedFrom||'Shop',input.data.destinationGroupId??1,input.data.plannedShipDate||null,top]);response.status(201).json({loadId:(r as any).insertId})}catch(e:any){response.status(e?.code==='ER_DUP_ENTRY'?409:500).json({error:e?.code==='ER_DUP_ENTRY'?'This load number already exists.':'Unable to create the PowerFab load.'})}});
+app.post('/api/paint-loads/:loadId/items',async(request,response)=>{
+  const input=paintLoadItemsInput.safeParse(request.body);const {job,cid}=paintAccess(request),load=Number(request.params.loadId);
+  if(!cid)return response.status(401).json({error:'Contractor login required.'});if(!input.success||!load)return response.status(400).json({error:'Select at least one inspected instance.'});if(!job||!(await contractorCanAccessJob(cid,job)))return response.status(403).json({error:'Project is not assigned to this contractor.'});
+  try{const [lr]=await mysqlConnection.query('SELECT ProductionControlID FROM productioncontroltrucks WHERE TruckID=? LIMIT 1',[load]);const pdc=Number((lr as any[])[0]?.ProductionControlID||0);const wanted=[...new Set(input.data.qrCodes)],items=(await clientPaintEligible(job)).filter(a=>wanted.includes(a.qrCode));if(!pdc||items.length!==wanted.length)return response.status(400).json({error:'Selected instance is not Client / Fit-up inspected or is already assigned to a load.'});
+    const byAssembly=new Map<number,any[]>();for(const item of items)byAssembly.set(item.assemblyId,[...(byAssembly.get(item.assemblyId)||[]),item]);
+    for(const [assemblyId,group] of byAssembly){const first=group[0];const [pi]=await mysqlConnection.query('SELECT ProductionControlItemID, MainMark, PieceMark FROM productioncontrolitems WHERE ProductionControlID=? AND ProductionControlAssemblyID=? AND InstanceTracking=3 ORDER BY ProductionControlItemID LIMIT 1',[pdc,assemblyId]);const sourceItem=(pi as any[])[0];const itemId=Number(sourceItem?.ProductionControlItemID||0);if(!itemId)throw Error('Assembly item not found.');const [inserted]=await mysqlConnection.query('INSERT INTO productioncontrolitemtrucks (ProductionControlID,MainMark,PieceMark,TruckID,SequenceID,PreviousShippingDestinationGroupID,Quantity,QuantityLoaded,QuantityReturned,RecalculateTruckTotals) VALUES (?,?,?, ?,0,0,?,0,0,1)',[pdc,sourceItem.MainMark,sourceItem.PieceMark||sourceItem.MainMark,load,group.length]);const truckItemId=Number((inserted as any).insertId);for(const instance of group)await mysqlConnection.query('INSERT INTO productioncontrolitemtruckinstancenumbers (ProductionControlItemTruckID,ProductionControlItemID,InstanceNumber,ShippingDestinationGroupID,DateLoaded) VALUES (?,?,?,1,NULL)',[truckItemId,itemId,instance.instanceNumber]);await markPaintInstancesComplete(pdc,assemblyId,group.map(instance=>instance.instanceNumber));}
+    await mysqlConnection.query('UPDATE productioncontroltrucks SET QuantityAssigned=QuantityAssigned+?,AssignedWeight=AssignedWeight+?,RecalculateTruckTotals=1 WHERE TruckID=?',[items.length,items.reduce((n,a)=>n+a.weight,0),load]);await reconcilePaintLoadStatus(load);response.status(201).json({saved:true,instanceCount:items.length});
+  }catch(e){console.error(e);response.status(500).json({error:'Unable to assign instances to this load.'})}
+});
+const paintLoadUpdateInput = paintLoadInput.partial();
+app.patch('/api/paint-loads/:loadId',async(request,response)=>{
+  const input=paintLoadUpdateInput.safeParse(request.body);const {job,cid}=paintAccess(request),load=Number(request.params.loadId);
+  if(!cid)return response.status(401).json({error:'Contractor login required.'});if(!load||!input.success)return response.status(400).json({error:'Valid load details are required.'});if(!job||!(await contractorCanAccessJob(cid,job)))return response.status(403).json({error:'Project is not assigned to this contractor.'});
+  try{const [rows]=await mysqlConnection.query('SELECT t.TruckID FROM productioncontroltrucks t JOIN productioncontroljobs j ON j.ProductionControlID=t.ProductionControlID WHERE t.TruckID=? AND j.JobNumber=? LIMIT 1',[load,job]);if(!(rows as any[]).length)return response.status(404).json({error:'Load not found.'});const d=input.data;await mysqlConnection.query('UPDATE productioncontroltrucks SET TruckNumber=COALESCE(?,TruckNumber),TrailerNumber=?,Carrier=?,Capacity=COALESCE(?,Capacity),LoadCategory1=?,LoadCategory2=?,LoadCategory3=?,ShippedFrom=?,ShippingDestinationGroupID=?,PlannedShipDate=?,RecalculateTruckTotals=1 WHERE TruckID=?',[d.loadNumber||null,d.trailerNumber||null,d.carrier||null,d.capacity??null,d.driverName||null,d.pickupLocation||null,d.receivingLocation||null,d.shippedFrom||null,d.destinationGroupId??null,d.plannedShipDate||null,load]);if(d.topTextDescription!==undefined){const [top]=await mysqlConnection.query('SELECT TopText FROM productioncontrolshippingtoptexts WHERE Description=? LIMIT 1',[d.topTextDescription]);await mysqlConnection.query('UPDATE productioncontroltrucks SET TopText=? WHERE TruckID=?',[(top as any[])[0]?.TopText||'',load])}response.json({saved:true})}catch(error){console.error('Unable to update PowerFab load',error);response.status(500).json({error:'Unable to update the PowerFab load.'})}
+});
+app.post('/api/paint-loads/:loadId/ship',async(request,response)=>{const {job,cid}=paintAccess(request),load=Number(request.params.loadId);if(!cid)return response.status(401).json({error:'Contractor login required.'});if(!load||!job||!(await contractorCanAccessJob(cid,job)))return response.status(403).json({error:'Project is not assigned to this contractor.'});try{const [rows]=await mysqlConnection.query('SELECT t.TruckID,t.QuantityAssigned FROM productioncontroltrucks t JOIN productioncontroljobs j ON j.ProductionControlID=t.ProductionControlID WHERE t.TruckID=? AND j.JobNumber=? LIMIT 1',[load,job]);if(!(rows as any[]).length)return response.status(404).json({error:'Load not found.'});if(!Number((rows as any[])[0].QuantityAssigned))return response.status(400).json({error:'Add at least one assembly instance before shipping this load.'});await mysqlConnection.query('UPDATE productioncontroltrucks SET Shipped=1,ShippedDate=COALESCE(ShippedDate,CURDATE()),RecalculateTruckTotals=1 WHERE TruckID=?',[load]);response.json({saved:true,shipped:true})}catch(error){console.error('Unable to ship PowerFab load',error);response.status(500).json({error:'Unable to ship the PowerFab load.'})}});
+app.post('/api/paint-loads/:loadId/reopen',async(request,response)=>{const {job,cid}=paintAccess(request),load=Number(request.params.loadId);if(!cid)return response.status(401).json({error:'Contractor login required.'});if(!load||!job||!(await contractorCanAccessJob(cid,job)))return response.status(403).json({error:'Project is not assigned to this contractor.'});try{const [result]=await mysqlConnection.query('UPDATE productioncontroltrucks t JOIN productioncontroljobs j ON j.ProductionControlID=t.ProductionControlID SET t.Shipped=0,t.ShippedDate=NULL,t.RecalculateTruckTotals=1 WHERE t.TruckID=? AND j.JobNumber=?',[load,job]);if(!(result as any).affectedRows)return response.status(404).json({error:'Load not found.'});response.json({saved:true,shipped:false})}catch(error){console.error('Unable to reopen PowerFab load',error);response.status(500).json({error:'Unable to reopen the PowerFab load.'})}});
+app.post('/api/paint-loads/:loadId/shipping-ticket',async(request,response)=>{const {job,cid}=paintAccess(request),load=Number(request.params.loadId);if(!cid)return response.status(401).json({error:'Contractor login required.'});if(!load||!job||!(await contractorCanAccessJob(cid,job)))return response.status(403).json({error:'Project is not assigned to this contractor.'});try{const [loadRows]=await mysqlConnection.query('SELECT t.TruckNumber,t.PlannedShipDate,t.ShippingDestinationGroupID,j.Comment2 FROM productioncontroltrucks t JOIN productioncontroljobs j ON j.ProductionControlID=t.ProductionControlID WHERE t.TruckID=? AND j.JobNumber=? LIMIT 1',[load,job]);const l=(loadRows as any[])[0];if(!l)return response.status(404).json({error:'Load not found.'});const [items]=await mysqlConnection.query("SELECT REPLACE(pit.MainMark,CHAR(1),'') AS assemblyMark,pi.InstanceNumber,COALESCE(a.AssemblyWeightEach,0) AS weight FROM productioncontrolitemtrucks pit JOIN productioncontrolitemtruckinstancenumbers pi ON pi.ProductionControlItemTruckID=pit.ProductionControlItemTruckID LEFT JOIN productioncontrolitems pci ON pci.ProductionControlItemID=pi.ProductionControlItemID LEFT JOIN productioncontrolassemblies a ON a.ProductionControlAssemblyID=pci.ProductionControlAssemblyID WHERE pit.TruckID=? ORDER BY pit.MainMark,pi.InstanceNumber",[load]);if(!(items as any[]).length)return response.status(400).json({error:'Add at least one assembly instance before creating a shipping ticket.'});const ticketNumber=`ST-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${randomBytes(3).toString('hex').toUpperCase()}`;const [ticket]=await mysqlConnection.query('INSERT INTO shipping_tickets (ticketNumber,jobNumber,contractorId,shippingDate,destination,remarks) VALUES (?,?,?,?,?,?)',[ticketNumber,job,cid,l.PlannedShipDate||null,request.body?.destination||null,`Load ${l.TruckNumber}`]);const ticketId=Number((ticket as any).insertId);for(const item of items as any[]){const qrCode=buildAssemblyQrCode(job,`${item.assemblyMark}-${item.InstanceNumber}`);await mysqlConnection.query('INSERT INTO shipping_ticket_items (shippingTicketId,qrCode,assemblyMark,quantity,weight) VALUES (?,?,?,?,?)',[ticketId,qrCode,item.assemblyMark,1,item.weight])}response.status(201).json({saved:true,ticketNumber,assemblyCount:(items as any[]).length})}catch(error){console.error('Unable to create load shipping ticket',error);response.status(500).json({error:'Unable to create the shipping ticket.'})}});
 app.get('/api/instances', async (request, response, next) => {
   try {
     const status = request.query.status as FabricationStatus | undefined;
@@ -1805,3 +2398,12 @@ const server = app.listen(port, '0.0.0.0', () => console.log(`PowerFab API liste
 
 process.on('SIGINT', async () => { server.close(); await prisma.$disconnect(); });
 process.on('SIGTERM', async () => { server.close(); await prisma.$disconnect(); });
+
+
+
+
+
+
+
+
+

@@ -13,6 +13,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const sessionPanel = document.getElementById('contractor-session');
   const contractorName = document.getElementById('contractor-name');
   const logoutButton = document.getElementById('contractor-logout');
+  const userMenuWrap = document.querySelector('.user-menu-wrap');
+  const userButton = userMenuWrap?.querySelector('.user-button');
+  const userMenu = userMenuWrap?.querySelector('.user-menu');
+  const menuLogoutButton = userMenuWrap?.querySelector('.logout-menu-item');
 
   const state = {
     allProjects: [],
@@ -28,6 +32,11 @@ document.addEventListener('DOMContentLoaded', () => {
     connectButton.classList.remove('hidden');
     projectsOpen.classList.remove('hidden');
     scanQrOpen.classList.remove('hidden');
+    if (userButton) {
+      const displayName = contractor.contractorName || contractor.username || 'User';
+      userButton.textContent = displayName;
+      userButton.setAttribute('aria-label', `User profile: ${displayName}`);
+    }
   }
 
   loginForm.addEventListener('submit', async (event) => {
@@ -59,6 +68,29 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+
+  if (userButton && userMenu && menuLogoutButton) {
+    userButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const isHidden = userMenu.classList.toggle('hidden');
+      userButton.setAttribute('aria-expanded', String(!isHidden));
+    });
+
+    menuLogoutButton.addEventListener('click', async () => {
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } finally {
+        window.location.href = '/';
+      }
+    });
+  }
+
+  document.addEventListener('click', (event) => {
+    if (userMenu && !userMenuWrap?.contains(event.target)) {
+      userMenu.classList.add('hidden');
+      userButton?.setAttribute('aria-expanded', 'false');
+    }
+  });
 
   function syncSelectOptions(source, target) {
     const values = [...new Set(source.map((item) => item).filter(Boolean))].sort();

@@ -11,15 +11,8 @@
     <header class="topbar detail-topbar">
       <div class="topbar-left">
         <button class="menu-button" type="button" aria-label="Open menu">☰</button>
-        <div class="brand" aria-label="Adani Fab & Erection Tracker" title="Adani Fab & Erection Tracker" style="cursor: pointer;">
-          <div class="brand-mark" aria-hidden="true">
-            <span class="brand-mark-inner"></span>
-          </div>
-          <div class="brand-text">
-            <span class="tekla">Adani</span>
-            <span class="powerfab">Fab &amp; Erection</span>
-            <span class="go">Tracker</span>
-          </div>
+        <div class="brand" aria-label="Adani" title="Adani" style="cursor: pointer;">
+          <img class="adani-logo" src="/Adani_logo.png" alt="Adani">
         </div>
       </div>
       <div class="user-menu-wrap">
@@ -170,7 +163,7 @@
         const brand = document.querySelector('.brand');
         if (brand) {
           brand.addEventListener('click', () => {
-            window.location.href = `/project.html?job=${encodeURIComponent(jobNumber)}`;
+            window.location.href = '/';
           });
         }
         meta.innerHTML = [

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Production Status</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .status-toolbar{display:flex;gap:10px;align-items:center;margin:16px 0}.status-toolbar input{height:34px;min-width:260px;border:1px solid #aeb4bd;padding:6px 8px}.status-table-wrap{overflow:auto;border:1px solid #b8bec6}.status-table{border-collapse:collapse;min-width:1050px;width:100%;font-size:.82rem}.status-table th,.status-table td{border-right:1px solid #b8bec6;border-bottom:1px solid #b8bec6;padding:6px 8px;white-space:nowrap;text-align:left}.status-table th{background:#d4d6dc;color:#162d40;position:sticky;top:0;z-index:1}.status-table tbody tr:nth-child(even){background:#e5edf2}.status-table tbody tr:nth-child(odd){background:#f5f7f8}.status-table .assembly-mark{font-weight:700;color:#075f93}.status-cell{min-width:112px;text-align:center!important}.status-cell.complete{background:#c8e7d0;color:#145b2b}.status-cell.partial{background:#fff0c7;color:#775500}.status-cell.none{background:#f3caca;color:#7c1e1e}.status-cell.na{color:#66727b}.status-count{display:block;font-weight:700}.status-label{display:block;font-size:.72rem;margin-top:2px}.status-loading{padding:22px;text-align:center}
+  </style>
+</head>
+<body class="detail-page">
+  <div class="page-shell project-shell">
+    <header class="topbar detail-topbar"><div class="topbar-left"><div class="brand" title="Home" role="button" tabindex="0"><img class="adani-logo" src="/Adani_logo.png" alt="Adani"></div></div><div class="user-menu-wrap"><button class="user-button" type="button" aria-label="User profile">User</button><div class="user-menu hidden"><button type="button" class="user-menu-item logout-menu-item">Logout</button></div></div></header>
+    <main class="detail-content">
+      <button id="back" type="button" class="secondary-button">Back to Project</button>
+      <h1 id="title" class="project-title">Production Status</h1>
+      <p id="message" role="status"></p>
+      <div class="status-toolbar"><label for="filter">Filter assembly</label><input id="filter" type="search" placeholder="Drawing or main mark"></div>
+      <div class="status-table-wrap"><table class="status-table"><thead id="head"></thead><tbody id="rows"><tr><td class="status-loading">Loading production status...</td></tr></tbody></table></div>
+    </main>
+  </div>
+<script>
+const params=new URLSearchParams(location.search),job=params.get('job')||'',title=document.getElementById('title'),message=document.getElementById('message'),head=document.getElementById('head'),rows=document.getElementById('rows'),filter=document.getElementById('filter');let data=[];
+const esc=value=>String(value??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+const render=()=>{const term=filter.value.trim().toLowerCase();const visible=data.filter(row=>!term||`${row.mainMark} ${row.drawingNumber}`.toLowerCase().includes(term));rows.innerHTML=visible.length?visible.map(row=>`<tr><td class="assembly-mark">${esc(row.drawingNumber||'—')}</td><td class="assembly-mark">${esc(row.mainMark||'—')}</td><td>${row.quantity}</td><td>${Number(row.weight||0).toLocaleString(undefined,{maximumFractionDigits:2})} kg</td>${row.stations.map(cell=>{const total=Number(cell.total||0),completed=Number(cell.completed||0),state=completed>=total&&total>0?'complete':completed>0?'partial':total?'none':'na';return `<td class="status-cell ${state}"><span class="status-count">${completed} of ${total}</span><span class="status-label">${esc(cell.stationName)}</span></td>`}).join('')}</tr>`).join(''):'<tr><td colspan="20" class="status-loading">No assemblies match the filter.</td></tr>'};
+document.getElementById('back').onclick=()=>location.href=`/project.html?job=${encodeURIComponent(job)}`;document.querySelector('.brand').onclick=()=>location.href='/';filter.oninput=render;document.querySelector('.logout-menu-item').onclick=async()=>{await fetch('/api/auth/logout',{method:'POST'});location.href='/'};
+fetch('/api/auth/me').then(async response=>{if(!response.ok)throw Error();const payload=await response.json();document.querySelector('.user-button').textContent=payload.contractor?.contractorName||payload.contractor?.username||'User'}).catch(()=>location.href=`/?return=${encodeURIComponent(location.pathname+location.search)}`);
+(async()=>{try{if(!job)throw Error('No project was selected.');const response=await fetch(`/api/project-production-status?job=${encodeURIComponent(job)}`);const payload=await response.json();if(!response.ok)throw Error(payload.error||'Unable to load production status.');title.textContent=`${payload.jobNumber} Production Status`;head.innerHTML=`<tr><th>Drawing #</th><th>Main Mark</th><th>Qty</th><th>Weight</th>${payload.stations.map(station=>`<th>${esc(station.description)}</th>`).join('')}</tr>`;data=payload.assemblies;render()}catch(error){message.textContent=error.message;rows.innerHTML='<tr><td class="status-loading">Unable to load production status.</td></tr>'}})();
+</script>
+</body>
+</html>

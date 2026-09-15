@@ -11,16 +11,16 @@
     <header class="topbar detail-topbar">
       <div class="topbar-left">
         <button class="menu-button" type="button" aria-label="Open menu">☰</button>
-        <div class="brand" aria-label="Adani Fab & Erection Tracker" title="Adani Fab & Erection Tracker" style="cursor: pointer;">
-          <div class="brand-mark" aria-hidden="true"><span class="brand-mark-inner"></span></div>
-          <div class="brand-text">
-            <span class="tekla">Adani</span>
-            <span class="powerfab">Fab &amp; Erection</span>
-            <span class="go">Tracker</span>
-          </div>
+        <div class="brand" aria-label="Adani" title="Adani" style="cursor: pointer;">
+          <img class="adani-logo" src="/Adani_logo.png" alt="Adani">
         </div>
       </div>
-      <button class="user-button" type="button" aria-label="User profile">◔</button>
+      <div class="user-menu-wrap">
+        <button class="user-button" type="button" aria-label="User profile" aria-expanded="false">◔</button>
+        <div class="user-menu hidden" role="menu" aria-label="User menu">
+          <button type="button" class="user-menu-item logout-menu-item">Logout</button>
+        </div>
+      </div>
     </header>
 
     <main class="detail-content">
@@ -43,20 +43,24 @@
 
         <div class="scan-result hidden" id="scan-result">
           <div class="scan-status-row">
-            <span class="scan-status-label">Assembly</span>
-            <strong id="scan-assembly-mark">—</strong>
-          </div>
-          <div class="scan-status-row">
-            <span class="scan-status-label">Current Stage</span>
-            <strong id="scan-current-stage">—</strong>
-          </div>
-          <div class="scan-status-row">
-            <span class="scan-status-label">Job</span>
+            <span class="scan-status-label">Job No</span>
             <strong id="scan-job-number">—</strong>
           </div>
           <div class="scan-status-row">
-            <span class="scan-status-label">Contractor</span>
-            <strong id="scan-contractor-name">—</strong>
+            <span class="scan-status-label">Job Description</span>
+            <strong id="scan-job-description">—</strong>
+          </div>
+          <div class="scan-status-row">
+            <span class="scan-status-label">Drawing No</span>
+            <strong id="scan-drawing-number">—</strong>
+          </div>
+          <div class="scan-status-row">
+            <span class="scan-status-label">Instance Mark No</span>
+            <strong id="scan-instance-mark">—</strong>
+          </div>
+          <div class="scan-status-row">
+            <span class="scan-status-label">Assembly Instance Weight</span>
+            <strong id="scan-assembly-weight">—</strong>
           </div>
 
           <div class="scan-actions">
@@ -77,10 +81,11 @@
 
     const qrInput = document.getElementById('scan-qr-input');
     const resultBox = document.getElementById('scan-result');
-    const assemblyMark = document.getElementById('scan-assembly-mark');
-    const currentStage = document.getElementById('scan-current-stage');
     const jobField = document.getElementById('scan-job-number');
-    const contractorField = document.getElementById('scan-contractor-name');
+    const jobDescriptionField = document.getElementById('scan-job-description');
+    const drawingNumberField = document.getElementById('scan-drawing-number');
+    const instanceMarkField = document.getElementById('scan-instance-mark');
+    const assemblyWeightField = document.getElementById('scan-assembly-weight');
     const submitButton = document.getElementById('scan-submit');
     const drawingButton = document.getElementById('scan-drawing');
     const inspectionButton = document.getElementById('scan-inspection');
@@ -94,6 +99,32 @@
     let activeQrCode = '';
     let cameraStream = null;
     let scanTimer = null;
+
+    const brand = document.querySelector('.brand');
+    const userMenuWrap = document.querySelector('.user-menu-wrap');
+    const userButton = userMenuWrap.querySelector('.user-button');
+    const userMenu = userMenuWrap.querySelector('.user-menu');
+    const logoutButton = userMenuWrap.querySelector('.logout-menu-item');
+
+    brand.addEventListener('click', () => { window.location.href = '/'; });
+    userButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const isHidden = userMenu.classList.toggle('hidden');
+      userButton.setAttribute('aria-expanded', String(!isHidden));
+    });
+    logoutButton.addEventListener('click', async () => {
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } finally {
+        window.location.href = '/';
+      }
+    });
+    document.addEventListener('click', (event) => {
+      if (!userMenuWrap.contains(event.target)) {
+        userMenu.classList.add('hidden');
+        userButton.setAttribute('aria-expanded', 'false');
+      }
+    });
 
     function escapeHtml(value) {
       return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -190,10 +221,11 @@
         }
 
         activeQrCode = qrCode;
-        assemblyMark.textContent = payload.assemblyMark || payload.qrCode || 'Unknown assembly';
-        currentStage.textContent = payload.currentStage || 'Fitup';
         jobField.textContent = payload.jobNumber || jobNumber || 'N/A';
-        contractorField.textContent = payload.contractorName || 'Assigned contractor';
+        jobDescriptionField.textContent = payload.jobDescription || '—';
+        drawingNumberField.textContent = payload.drawingNumber || '—';
+        instanceMarkField.textContent = payload.instanceMark || '—';
+        assemblyWeightField.textContent = `${Number(payload.assemblyWeight || 0).toLocaleString(undefined, { maximumFractionDigits: 3 })} kg`;
         resultBox.classList.remove('hidden');
         inspectionButton.onclick = () => { window.location.href = `/inspection.html?qr=${encodeURIComponent(activeQrCode)}`; };
         drawingButton.onclick = () => window.open(`/drawings.html?job=${encodeURIComponent(payload.jobNumber || jobNumber)}${payload.drawingId ? `&drawing=${encodeURIComponent(payload.drawingId)}` : ''}`, '_blank', 'noopener,noreferrer');
@@ -227,6 +259,10 @@
           window.location.href = `/?return=${encodeURIComponent(returnPath)}`;
           return false;
         }
+        const payload = await response.json();
+        const displayName = payload.contractor?.contractorName || payload.contractor?.username || 'User';
+        userButton.textContent = displayName;
+        userButton.setAttribute('aria-label', `User profile: ${displayName}`);
         return true;
       } catch {
         window.location.href = `/?return=${encodeURIComponent(window.location.pathname + window.location.search)}`;
