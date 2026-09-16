@@ -153,6 +153,8 @@
 
         meta.innerHTML = details.map((item) => `<span>${item}</span>`).join('');
         document.getElementById('transmittals-count').textContent = project.transmittalCount ?? 0;
+        const shiftToPaintCard = document.getElementById('shipping-status-view')?.closest('.detail-card');
+        if (shiftToPaintCard && !project.canShiftToPaint) shiftToPaintCard.remove();
 
         const countingMap = [
           ['assemblies-count', project.assemblyCount],
@@ -190,7 +192,7 @@
         document.getElementById('inspections-view').addEventListener('click', openInspections);
         document.getElementById('production-status-view').addEventListener('click', () => { window.location.href = `/production-status.html?job=${encodeURIComponent(jobNumber)}`; });
         document.getElementById('transmittals-view').addEventListener('click', openTransmittals);
-        document.getElementById('shipping-status-view').addEventListener('click', () => { window.location.href = '/shift-to-paint.html?job=' + encodeURIComponent(jobNumber); });
+        document.getElementById('shipping-status-view')?.addEventListener('click', () => { window.location.href = '/shift-to-paint.html?job=' + encodeURIComponent(jobNumber); });
 
         const brand = document.querySelector('.brand');
         if (brand) {

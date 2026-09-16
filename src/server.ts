@@ -137,10 +137,13 @@ async function ensureAssemblyScanTables() {
       passwordHash VARCHAR(255) NOT NULL,
       contractorName VARCHAR(255) NOT NULL,
       active BOOLEAN NOT NULL DEFAULT TRUE,
+      canManageAccess BOOLEAN NOT NULL DEFAULT FALSE,
       createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  const [accessAdminColumn] = await mysqlConnection.query(`SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='contractor_users' AND COLUMN_NAME='canManageAccess' LIMIT 1`);
+  if (!(accessAdminColumn as Array<Record<string, any>>).length) await mysqlConnection.query('ALTER TABLE contractor_users ADD COLUMN canManageAccess BOOLEAN NOT NULL DEFAULT FALSE');
 
   await mysqlConnection.query(`
     CREATE TABLE IF NOT EXISTS contractor_project_assignments (
@@ -149,6 +152,18 @@ async function ensureAssemblyScanTables() {
       createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (contractorId, jobNumber),
       INDEX idx_assignment_job (jobNumber)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  await mysqlConnection.query(`
+    CREATE TABLE IF NOT EXISTS contractor_feature_permissions (
+      contractorId BIGINT NOT NULL,
+      featureName VARCHAR(100) NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (contractorId, featureName),
+      INDEX idx_feature_permission_name (featureName),
+      CONSTRAINT fk_feature_permission_contractor FOREIGN KEY (contractorId) REFERENCES contractor_users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
@@ -213,6 +228,7 @@ async function ensureAssemblyScanTables() {
   const bootstrapUsername = String(process.env.CONTRACTOR_BOOTSTRAP_USERNAME ?? '').trim();
   const bootstrapPassword = String(process.env.CONTRACTOR_BOOTSTRAP_PASSWORD ?? '');
   const bootstrapName = String(process.env.CONTRACTOR_BOOTSTRAP_NAME ?? '').trim();
+  const accessAdminUsername = String(process.env.CONTRACTOR_ACCESS_ADMIN_USERNAME ?? '').trim();
   if (bootstrapUsername && bootstrapPassword && bootstrapName) {
     await mysqlConnection.query(
       'INSERT INTO contractor_users (username, passwordHash, contractorName, active) VALUES (?, ?, ?, TRUE) ON DUPLICATE KEY UPDATE passwordHash = VALUES(passwordHash), contractorName = VALUES(contractorName), active = TRUE',
@@ -225,6 +241,7 @@ async function ensureAssemblyScanTables() {
       await mysqlConnection.query('INSERT IGNORE INTO contractor_project_assignments (contractorId, jobNumber) VALUES (?, ?)', [contractorId, jobNumber]);
     }
   }
+  if (accessAdminUsername) await mysqlConnection.query('UPDATE contractor_users SET canManageAccess=TRUE WHERE username=?', [accessAdminUsername]);
 }
 
 function buildAssemblyQrCode(jobNumber: string, assemblyKey: string | number) {
@@ -650,7 +667,37 @@ app.get('/api/auth/me', async (request, response) => {
   const [rows] = await mysqlConnection.query('SELECT username, contractorName FROM contractor_users WHERE id = ? AND active = TRUE LIMIT 1', [contractorId]);
   const contractor = (rows as Array<Record<string, any>>)[0];
   if (!contractor) return response.status(401).json({ error: 'Contractor login required.' });
-  response.json({ contractor });
+  const [permissionRows] = await mysqlConnection.query(
+    'SELECT enabled FROM contractor_feature_permissions WHERE contractorId = ? AND featureName = ? LIMIT 1',
+    [contractorId, 'SHIFT_TO_PAINT']
+  );
+  response.json({ contractor, permissions: { shiftToPaint: Boolean((permissionRows as Array<Record<string, any>>)[0]?.enabled) } });
+});
+
+async function requireAccessAdmin(request: express.Request, response: express.Response) {
+  const contractorId = getContractorId(request);
+  if (!contractorId) { response.status(401).json({ error: 'Contractor login required.' }); return null; }
+  const [rows] = await mysqlConnection.query('SELECT id,username,contractorName FROM contractor_users WHERE id=? AND active=TRUE AND canManageAccess=TRUE LIMIT 1', [contractorId]);
+  if (!(rows as Array<Record<string, any>>).length) { response.status(403).json({ error: 'Access management permission is required.' }); return null; }
+  return contractorId;
+}
+
+app.get('/api/admin/feature-permissions', async (request, response) => {
+  if (!await requireAccessAdmin(request, response)) return;
+  const [rows] = await mysqlConnection.query(`SELECT cu.id,cu.username,cu.contractorName,cu.active,cu.canManageAccess,
+    COALESCE(fp.enabled,FALSE) AS shiftToPaint
+    FROM contractor_users cu LEFT JOIN contractor_feature_permissions fp ON fp.contractorId=cu.id AND fp.featureName='SHIFT_TO_PAINT'
+    ORDER BY cu.contractorName,cu.username`);
+  response.json({ users: rows });
+});
+
+app.put('/api/admin/feature-permissions/:contractorId', async (request, response) => {
+  if (!await requireAccessAdmin(request, response)) return;
+  const contractorId = Number(request.params.contractorId);
+  if (!Number.isInteger(contractorId) || contractorId <= 0) return response.status(400).json({ error: 'Invalid user.' });
+  const enabled = Boolean(request.body?.shiftToPaint);
+  await mysqlConnection.query(`INSERT INTO contractor_feature_permissions (contractorId,featureName,enabled) VALUES (?, 'SHIFT_TO_PAINT', ?) ON DUPLICATE KEY UPDATE enabled=VALUES(enabled)`, [contractorId, enabled]);
+  response.json({ saved: true, contractorId, shiftToPaint: enabled });
 });
 
 async function loadProjectsFromDatabase() {
@@ -968,6 +1015,7 @@ app.get('/api/project-detail', async (request, response) => {
     const sequenceCount = productionControlId ? await getSingleValue('SELECT COUNT(*) AS total FROM `productioncontrolsequences` WHERE `ProductionControlID` = ?', [productionControlId]) : 0;
     const categoryCount = projectId ? await getSingleValue('SELECT COUNT(DISTINCT CategoryID) AS total FROM `productioncontrolitems` WHERE `ProductionControlID` = ?', [productionControlId || 0]) : 0;
     const inspectionCount = projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `inspectiontestrecords` WHERE `ProductionControlID` = ?', [productionControlId || 0]) : 0;
+    const [shiftPermissionRows] = await mysqlConnection.query('SELECT enabled FROM contractor_feature_permissions WHERE contractorId=? AND featureName=? LIMIT 1', [contractorId, 'SHIFT_TO_PAINT']);
     const rfiCount = projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `requestforinformationdrawings` WHERE `ProjectID` = ?', [projectId]) : 0;
     const transmittalCount = projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `transmittals` WHERE `ProjectID` = ?', [projectId]) : 0;
 
@@ -990,6 +1038,7 @@ app.get('/api/project-detail', async (request, response) => {
       productionTrackingCount: await getSingleValue('SELECT COUNT(*) AS total FROM `productioncontroljobs` WHERE `JobNumber` = ? ', [jobNumber]),
       productionStatusCount: await getSingleValue('SELECT COUNT(*) AS total FROM `productioncontroljobs` WHERE `JobNumber` = ? ', [jobNumber]),
       shippingStatusCount: await getSingleValue('SELECT COUNT(*) AS total FROM `productioncontroljobs` WHERE `JobNumber` = ? ', [jobNumber]),
+      canShiftToPaint: Boolean((shiftPermissionRows as Array<Record<string, any>>)[0]?.enabled),
       assemblies: assemblyList,
       projectId,
       drawingsUrl: buildPowerFabDrawingsUrl(productionControlId),
@@ -2256,6 +2305,16 @@ async function reconcileFitupInspectionStatus(productionControlId:number){
     WHERE s.ProductionControlID=? AND s.StationID IN (6,7)`,[productionControlId]);
 }
 function paintAccess(request:express.Request){const job=String(request.query.job||'').trim(),cid=getContractorId(request);return {job,cid}}
+async function contractorCanUseShiftToPaint(contractorId:number){
+  const [rows]=await mysqlConnection.query('SELECT enabled FROM contractor_feature_permissions WHERE contractorId=? AND featureName=? LIMIT 1',[contractorId,'SHIFT_TO_PAINT']);
+  return Boolean((rows as Array<Record<string, any>>)[0]?.enabled);
+}
+app.use('/api/paint-loads',async(request,response,next)=>{
+  const contractorId=getContractorId(request);
+  if(!contractorId)return response.status(401).json({error:'Contractor login required.'});
+  if(!(await contractorCanUseShiftToPaint(contractorId)))return response.status(403).json({error:'Shift to Paint access is not enabled for this user.'});
+  next();
+});
 async function clientPaintEligible(jobNumber:string,loadId=0){try{return await queryClientPaintEligible(jobNumber,loadId)}catch(error){console.error('Unable to load eligible paint assemblies',error);return []}}
 app.get('/api/paint-loads',async(request,response)=>{
   const {job,cid}=paintAccess(request); if(!cid)return response.status(401).json({error:'Contractor login required.'});

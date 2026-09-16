@@ -33,6 +33,29 @@ The repository includes `render.yaml`. In Render, choose **New > Blueprint**, co
 
 The mobile workflow is served by the same responsive web app. Use the permanent mobile entry path `/mobile` (it redirects to `/scan.html`) from a phone browser over mobile data; it does not require a separate mobile server.
 
+### Feature permissions
+
+Shift to Paint is restricted per contractor. Access is denied unless the user has an enabled row in `contractor_feature_permissions`:
+
+Set `CONTRACTOR_ACCESS_ADMIN_USERNAME` to the username allowed to manage permissions, then open `/user-access.html` after login. The page lists all users and provides a Shift to Paint checkbox with Save.
+
+```sql
+-- Find users
+SELECT id, username, contractorName FROM contractor_users WHERE active = TRUE;
+
+-- Grant Shift to Paint
+INSERT INTO contractor_feature_permissions (contractorId, featureName, enabled)
+VALUES (1, 'SHIFT_TO_PAINT', TRUE)
+ON DUPLICATE KEY UPDATE enabled = TRUE;
+
+-- Revoke Shift to Paint
+UPDATE contractor_feature_permissions
+SET enabled = FALSE
+WHERE contractorId = 1 AND featureName = 'SHIFT_TO_PAINT';
+```
+
+The permission is enforced on all `/api/paint-loads` endpoints and the project navigation card is hidden for unauthorized users.
+
 To publish this repository to GitHub from PowerShell after creating `venkateshvupputuri-droid/powerfab-api`:
 
 ```powershell
