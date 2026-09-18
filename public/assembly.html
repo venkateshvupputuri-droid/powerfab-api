@@ -24,15 +24,13 @@
     </header>
 
     <nav class="project-nav" aria-label="Project sections">
-      <button type="button" class="project-nav-item">OVERVIEW</button>
+      <button type="button" id="overview-nav" class="project-nav-item">OVERVIEW</button>
       <button type="button" class="project-nav-item active">ASSEMBLIES</button>
       <button type="button" id="drawings-nav" class="project-nav-item">DRAWINGS</button>
+      <button type="button" id="fitup-report-nav" class="project-nav-item">FITUP REPORT</button>
       <button type="button" class="project-nav-item">SEQUENCES</button>
-      <button type="button" class="project-nav-item">CATEGORIES</button>
       <button type="button" id="inspections-nav" class="project-nav-item">INSPECTIONS</button>
       <button type="button" class="project-nav-item">INSPECTION TEST RECORDS</button>
-      <button type="button" class="project-nav-item">PREPARED CUT LISTS</button>
-      <button type="button" class="project-nav-item">MATERIAL STATUS</button>
     </nav>
 
     <main class="detail-content">
@@ -42,7 +40,6 @@
       <div class="assembly-toolbar">
         <div class="assembly-toolbar-title">Search</div>
         <input id="assembly-search" type="text" placeholder="Search..." aria-label="Search assemblies">
-        <button type="button" id="scan-assembly-btn" class="scan-button">Scan QR</button>
       </div>
 
       <section class="assembly-table-wrap">
@@ -54,9 +51,6 @@
               <th>Assy Qty</th>
               <th>Assembly Weight Each</th>
               <th>Assembly Weight</th>
-              <th>Current Stage</th>
-              <th>QR</th>
-              <th>Print</th>
             </tr>
           </thead>
           <tbody id="assembly-rows"></tbody>
@@ -154,8 +148,14 @@
         const project = payload.project;
 
         title.textContent = `${project.jobNumber || jobNumber} Assemblies`;
+        document.getElementById('overview-nav').addEventListener('click', () => {
+          window.location.href = `/project.html?job=${encodeURIComponent(jobNumber)}`;
+        });
         document.getElementById('drawings-nav').addEventListener('click', () => {
           window.location.href = `/drawings.html?job=${encodeURIComponent(jobNumber)}`;
+        });
+        document.getElementById('fitup-report-nav').addEventListener('click', () => {
+          window.location.href = `/fitup-report.html?job=${encodeURIComponent(jobNumber)}`;
         });
         document.getElementById('inspections-nav').addEventListener('click', () => {
           window.location.href = `/inspections.html?job=${encodeURIComponent(jobNumber)}`;
@@ -182,17 +182,13 @@
                 <td>No live assembly data available for this project.</td>
                 <td>0</td>
                 <td>0 kg</td>
-                <td>Fitup</td>
-                <td>—</td>
-                <td>—</td>
+                <td>0 kg</td>
               </tr>
             `;
             return;
           }
 
           rows.innerHTML = items.map((item) => {
-            const qrCode = item.qrCode || 'assembly';
-            const stage = item.fabricationStage || 'Fitup';
             const qty = Number(item.assemblyQuantity ?? 0);
             const assemblyWeightEach = Number(item.assemblyWeightEach ?? item.weight ?? item.assemblyWeightTotal ?? 0);
             const assemblyWeight = Number(item.assemblyWeight ?? item.assemblyWeightTotal ?? (assemblyWeightEach * qty));
@@ -204,34 +200,10 @@
                 <td>${qty}</td>
                 <td>${formatWeight(assemblyWeightEach)}</td>
                 <td>${formatWeight(assemblyWeight)}</td>
-                <td>
-                  <select class="stage-select" data-qr="${qrCode}">
-                    ${fabricationStages.map((option) => `<option value="${option}" ${option === stage ? 'selected' : ''}>${option}</option>`).join('')}
-                  </select>
-                </td>
-                <td class="qr-cell">
-                  <img src="/api/assemblies/${encodeURIComponent(qrCode)}/qr" alt="QR code for ${item.mainMark || 'assembly'}" class="assembly-qr" />
-                </td>
-                <td>
-                  <button type="button" class="print-qr-btn" data-qr="${qrCode}" data-mainmark="${escapeHtml(item.mainMark || 'Assembly')}">Print preview</button>
-                </td>
               </tr>
             `;
           }).join('');
 
-          rows.querySelectorAll('.stage-select').forEach((select) => {
-            select.addEventListener('change', async () => {
-              await updateAssemblyStage(select.dataset.qr, select);
-            });
-          });
-
-          rows.querySelectorAll('.print-qr-btn').forEach((button) => {
-            button.addEventListener('click', () => {
-              const qrCode = button.dataset.qr;
-              const mainMark = button.dataset.mainmark || 'Assembly';
-              printAssemblyQr(qrCode, mainMark);
-            });
-          });
         };
 
         renderRows(allAssemblyRows);
@@ -247,13 +219,6 @@
           });
         }
 
-        const scanButton = document.getElementById('scan-assembly-btn');
-        if (scanButton) {
-          scanButton.addEventListener('click', () => {
-            const currentJob = new URLSearchParams(window.location.search).get('job') || '';
-            window.location.href = `/scan.html${currentJob ? `?job=${encodeURIComponent(currentJob)}` : ''}`;
-          });
-        }
       } catch (error) {
         console.error(error);
         title.textContent = `${jobNumber} Assemblies`;

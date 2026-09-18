@@ -5,7 +5,9 @@
   const params = new URLSearchParams(window.location.search);
   const job = params.get('job') || '';
   const load = Number(params.get('load') || 0);
+  const destinationMode = params.get('destination') || '';
   const message = document.getElementById('message');
+  let coatingReadOnly = false;
   const value = id => document.getElementById(id)?.value || '';
   const request = async (url, options) => {
     const response = await fetch(url, options);
@@ -14,7 +16,58 @@
     return payload;
   };
 
+  const scanButton = document.createElement('button');
+  scanButton.type = 'button';
+  scanButton.className = 'secondary-button';
+  scanButton.textContent = 'Scan Shipping Ticket QR';
+  scanButton.onclick = () => { window.location.href = `/shipping-scan.html?job=${encodeURIComponent(job)}`; };
+  document.getElementById('title')?.insertAdjacentElement('afterend', scanButton);
+  const title = document.getElementById('title');
+  if (title) {
+    title.textContent = title.textContent.replace(/Shift to Paint/g, 'Shipping');
+    new MutationObserver(() => {
+      if (title.textContent.includes('Shift to Paint')) title.textContent = title.textContent.replace(/Shift to Paint/g, 'Shipping');
+    }).observe(title, { childList: true, characterData: true, subtree: true });
+  }
+  document.title = document.title.replace(/Shift to Paint/g, 'Shipping');
+  fetch('/api/auth/me').then(response => response.ok ? response.json() : null).then(auth => {
+    if (!auth?.permissions?.canConfirmReceipt) scanButton.remove();
+    if (auth?.permissions?.coatingReadOnly) {
+      document.querySelectorAll('button').forEach(button => {
+        if (button.textContent.trim() === 'Create New Load') button.remove();
+      });
+      coatingReadOnly = true;
+      document.getElementById('create')?.classList.add('hidden');
+      ['new-load', 'save-load', 'delete-load', 'help-load', 'ship', 'summary-ship', 'ticket', 'summary-ticket', 'add-material'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+      document.querySelectorAll('[data-action]').forEach(element => element.classList.add('hidden'));
+      document.querySelector('#if button[type="submit"]')?.classList.add('hidden');
+      document.getElementById('summary-reopen')?.remove();
+      document.querySelectorAll('.load-footer-actions, .ship-row').forEach(element => element.classList.add('hidden'));
+      document.querySelectorAll('input, select, textarea').forEach(element => element.disabled = true);
+    }
+  }).catch(() => scanButton.remove());
+
+  if (destinationMode) {
+    const destinationSelect = document.getElementById('dest');
+    const detailDestinationSelect = document.getElementById('detail-dest');
+    const desiredDestination = destinationMode === 'site' ? 'SITE' : 'LAYDOWN';
+    const selectDestination = select => {
+      if (!select) return;
+      const option = [...select.options].find(item => item.textContent.trim().toUpperCase().includes(desiredDestination));
+      if (option) select.value = option.value;
+    };
+    selectDestination(destinationSelect);
+    selectDestination(detailDestinationSelect);
+    window.setTimeout(() => {
+      selectDestination(document.getElementById('dest'));
+      selectDestination(document.getElementById('detail-dest'));
+    }, 500);
+  }
   if (!load || !job) return;
+  document.querySelectorAll('#loads a').forEach(link => { link.textContent = 'View Details'; });
+  new MutationObserver(() => document.querySelectorAll('#loads a').forEach(link => { link.textContent = 'View Details'; })).observe(document.getElementById('loads'), { childList: true });
+  document.getElementById('loads-section')?.classList.add('hidden');
+  document.getElementById('load-summary')?.classList.remove('hidden');
   document.getElementById('load-detail')?.classList.remove('hidden');
   document.querySelector('[data-tab="loaded"]')?.remove();
   document.querySelector('[data-tab="additional"]')?.remove();
@@ -30,7 +83,7 @@
     const body = document.getElementById('assigned-rows');
     const currentLoad = (payload.loads || []).find(item => Number(item.TruckID) === load);
     const summaryActions = document.querySelector('.summary-actions');
-    if (currentLoad?.Shipped && summaryActions && !document.getElementById('summary-reopen')) {
+    if (currentLoad?.Shipped && summaryActions && !coatingReadOnly && !document.getElementById('summary-reopen')) {
       const reopen = document.createElement('button');
       reopen.id = 'summary-reopen';
       reopen.type = 'button';
@@ -111,9 +164,10 @@
         body: JSON.stringify({ destination: value('detail-to') })
       });
       const rows = [...document.querySelectorAll('#summary-assemblies tr')].map(row => row.innerHTML).join('');
+      const qrUrl = `/api/shipping-tickets/${encodeURIComponent(payload.ticketNumber)}/qr`;
       const popup = window.open('', 'shipping-ticket', 'width=900,height=700');
       if (!popup) throw new Error('Allow pop-ups to print the shipping ticket.');
-      popup.document.write(`<!doctype html><title>Shipping Ticket ${payload.ticketNumber}</title><style>body{font:14px Arial;padding:28px}table{width:100%;border-collapse:collapse;margin-top:22px}th,td{border:1px solid #777;padding:8px;text-align:left}th{background:#eee}</style><h1>Shipping Ticket</h1><p><b>Job:</b> ${job}<br><b>Load:</b> ${value('detail-number')}<br><b>Ticket:</b> ${payload.ticketNumber}<br><b>Planned ship date:</b> ${value('ship-date') || '—'}</p><table><thead><tr><th>Assembly instance</th><th>Assembly</th><th>Weight</th></tr></thead><tbody>${rows || '<tr><td colspan="3">No assemblies assigned</td></tr>'}</tbody></table>`);
+      popup.document.write(`<!doctype html><title>Shipping Ticket ${payload.ticketNumber}</title><style>body{font:14px Arial;padding:28px}header{display:flex;justify-content:space-between;align-items:flex-start}header img{width:140px;height:140px}table{width:100%;border-collapse:collapse;margin-top:22px}th,td{border:1px solid #777;padding:8px;text-align:left}th{background:#eee}@media print{button{display:none}}</style><header><div><h1>Shipping Ticket</h1><p><b>Job:</b> ${job}<br><b>Load:</b> ${value('detail-number')}<br><b>Ticket:</b> ${payload.ticketNumber}<br><b>Planned ship date:</b> ${value('ship-date') || '—'}</p></div><img src="${qrUrl}" alt="Scan to confirm receipt"></header><p>Scan the QR code to confirm individual assembly receipt at the painting yard.</p><table><thead><tr><th>Assembly instance</th><th>Assembly</th><th>Weight</th></tr></thead><tbody>${rows || '<tr><td colspan="3">No assemblies assigned</td></tr>'}</tbody></table>`);
       popup.document.close();
       popup.focus();
       popup.print();

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Shipping Receipt</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="detail-page">
+  <div class="page-shell project-shell">
+    <main class="detail-content">
+      <h1 class="project-title">Shipping Receipt</h1>
+      <p id="message" role="status">Loading ticket...</p>
+      <section id="details" class="inspection-history hidden">
+        <h2 id="ticket-title"></h2>
+        <div id="ticket-meta" class="project-meta"></div>
+        <form id="receipt-form">
+          <div class="drawings-table-wrap">
+            <table class="drawings-table">
+              <thead><tr><th>Select</th><th>Assembly</th><th>QR code</th><th>Quantity</th><th>Weight</th><th>Received</th></tr></thead>
+              <tbody id="items"></tbody>
+            </table>
+          </div>
+          <button id="confirm-receipt" class="detail-button" type="submit">Confirm selected receipt</button>
+          <button id="return-material" class="secondary-button" type="button">Return selected material</button>
+        </form>
+      </section>
+    </main>
+  </div>
+  <script>
+    const ticket = new URLSearchParams(location.search).get('ticket') || '';
+    const message = document.getElementById('message');
+    const details = document.getElementById('details');
+    const items = document.getElementById('items');
+    const escapeHtml = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    let payload;
+    async function load() {
+      if (!ticket) throw Error('A shipping ticket is required.');
+      const response = await fetch(`/api/shipping-tickets/${encodeURIComponent(ticket)}/receipt`);
+      payload = await response.json();
+      if (!response.ok) throw Error(payload.error || 'Unable to load shipping ticket.');
+      const t = payload.ticket;
+      document.getElementById('ticket-title').textContent = `Ticket ${t.ticketNumber}`;
+      document.getElementById('ticket-meta').innerHTML = `<div><span>Job</span><strong>${escapeHtml(t.jobNumber)}</strong></div><div><span>Date</span><strong>${escapeHtml(t.shippingDate || '—')}</strong></div><div><span>Destination</span><strong>${escapeHtml(t.destination || '—')}</strong></div>`;
+      items.innerHTML = payload.items.length ? payload.items.map(item => `<tr><td><input type="checkbox" name="qrCode" value="${escapeHtml(item.qrCode)}" ${item.receivedAt || item.returnedAt ? 'disabled' : ''}></td><td>${escapeHtml(item.assemblyMark)}</td><td>${escapeHtml(item.qrCode)}</td><td>${escapeHtml(item.quantity)}</td><td>${Number(item.weight || 0).toLocaleString()} kg</td><td>${item.receivedAt ? `Received ${escapeHtml(item.receivedAt)}` : item.returnedAt ? `Returned ${escapeHtml(item.returnedAt)}` : 'Pending'}</td></tr>`).join('') : '<tr><td colspan="6">No assemblies are assigned to this ticket.</td></tr>';
+      message.textContent = '';
+      details.classList.remove('hidden');
+    }
+    document.getElementById('receipt-form').onsubmit = async event => {
+      event.preventDefault();
+      const qrCodes = [...document.querySelectorAll('input[name="qrCode"]:checked')].map(input => input.value);
+      if (!qrCodes.length) { message.textContent = 'Select at least one pending assembly.'; return; }
+      const response = await fetch(`/api/shipping-tickets/${encodeURIComponent(ticket)}/receipt`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ qrCodes }) });
+      const result = await response.json();
+      message.textContent = response.ok ? 'Receipt confirmed.' : (result.error || 'Unable to confirm receipt.');
+      if (response.ok) load().catch(error => { message.textContent = error.message; });
+    };
+    document.getElementById('return-material').onclick = async () => { const qrCodes = [...document.querySelectorAll('input[name="qrCode"]:checked')].map(input => input.value); if (!qrCodes.length) { message.textContent = 'Select at least one pending assembly.'; return; } const reason = window.prompt('Reason for return:') || ''; const response = await fetch(`/api/shipping-tickets/${encodeURIComponent(ticket)}/return`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ qrCodes, reason }) }); const result = await response.json(); message.textContent = response.ok ? 'Material return recorded.' : (result.error || 'Unable to record return.'); if (response.ok) load().catch(error => { message.textContent = error.message; }); };
+    fetch('/api/auth/me').then(async response => { if (!response.ok) throw Error(); const auth = await response.json(); if (!auth.permissions?.canConfirmReceipt) throw Error('Only Coating group users can scan Shipping Ticket QR codes.'); return load(); }).catch(error => { message.textContent = error.message || 'Only Coating group users can scan Shipping Ticket QR codes.'; document.getElementById('details').classList.add('hidden'); });
+  </script>
+</body>
+</html>

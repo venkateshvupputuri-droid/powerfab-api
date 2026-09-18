@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vendor Fitup Report</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .report-wrap { max-width: 1200px; margin: 0 auto; padding: 16px 18px 40px; }
+    .report-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 20px; }
+    .report-filter { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; color: #1d2a35; }
+    .report-filter select, .report-filter input { min-width: 200px; height: 34px; border: 1px solid rgba(20,20,20,0.22); padding: 0 10px; background: #fff; }
+    .report-table-wrap { overflow: auto; border: 1px solid rgba(20,20,20,0.18); background: rgba(255,255,255,0.35); }
+    .report-table { width: 100%; border-collapse: collapse; min-width: 980px; }
+    .report-table th, .report-table td { padding: 10px 12px; border-bottom: 1px solid rgba(20,20,20,0.16); text-align: left; vertical-align: top; }
+    .report-table th { background: rgba(13, 110, 167, 0.08); color: #1b2f3f; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .report-table tbody tr:nth-child(even) { background: rgba(255,255,255,0.12); }
+    .report-empty { padding: 24px; text-align: center; color: #546579; }
+    .report-button { border: 0; background: linear-gradient(180deg, #0d6ea7 0%, #0a5a8d 100%); color: #fff; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em; padding: 8px 12px; border-radius: 3px; }
+    .report-print-panel { position: fixed; inset: 0; display: none; z-index: 50; background: rgba(12, 20, 28, 0.46); }
+    .report-print-panel.show { display: block; }
+    .report-print-card { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(700px, calc(100vw - 32px)); background: #fff; border: 1px solid rgba(20,20,20,0.2); box-shadow: 0 16px 36px rgba(0,0,0,0.15); padding: 18px 18px 12px; }
+    .report-print-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .report-print-body { border-top: 1px solid rgba(20,20,20,0.16); padding-top: 12px; }
+    .report-print-block { margin-bottom: 10px; }
+    .report-print-block strong { display: inline-block; width: 140px; }
+    @media print {
+      .project-nav, .topbar, .secondary-button, .report-toolbar, .report-button, .report-print-panel { display: none !important; }
+      .report-wrap { max-width: none; margin: 0; padding: 0; }
+      .report-table-wrap { border: 0; overflow: visible; }
+      body { background: #fff; }
+    }
+  </style>
+</head>
+<body class="detail-page">
+  <div class="page-shell project-shell">
+    <header class="topbar detail-topbar">
+      <div class="topbar-left">
+        <button class="menu-button" type="button" aria-label="Open menu">☰</button>
+        <div class="brand" aria-label="Adani" title="Adani" style="cursor: pointer;">
+          <img class="adani-logo" src="/Adani_logo.png" alt="Adani">
+        </div>
+      </div>
+      <div class="user-menu-wrap">
+        <button class="user-button" type="button" aria-label="User profile" aria-expanded="false">◔</button>
+        <div class="user-menu hidden" role="menu" aria-label="User menu">
+          <button type="button" class="user-menu-item logout-menu-item">Logout</button>
+        </div>
+      </div>
+    </header>
+
+    <nav class="project-nav" aria-label="Project sections">
+      <button type="button" class="project-nav-item" id="overview-nav">OVERVIEW</button>
+      <button type="button" class="project-nav-item" id="assemblies-nav">ASSEMBLIES</button>
+      <button type="button" class="project-nav-item" id="drawings-nav">DRAWINGS</button>
+      <button type="button" class="project-nav-item active">FITUP REPORT</button>
+    </nav>
+
+    <main class="detail-content report-wrap">
+      <h1 id="report-title" class="project-title">Vendor Fitup Report</h1>
+
+      <div class="report-toolbar">
+        <div class="report-filter">
+          <label for="report-date">Date</label>
+          <input id="report-date" type="date" />
+        </div>
+        <button id="print-current" type="button" class="report-button">Print report</button>
+      </div>
+
+      <div class="report-table-wrap">
+        <table class="report-table">
+          <thead>
+            <tr>
+              <th>Assembly Instance</th>
+              <th>Weight</th>
+              <th>Result</th>
+              <th>Inspector</th>
+              <th>Remarks</th>
+              <th>Completed</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="report-rows"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <div id="report-print-panel" class="report-print-panel" aria-hidden="true">
+    <div class="report-print-card">
+      <div class="report-print-header">
+        <h2 id="print-title">Vendor Fitup Report</h2>
+        <button type="button" id="close-print" class="secondary-button">Close</button>
+      </div>
+      <div id="report-print-body" class="report-print-body"></div>
+      <div style="margin-top:14px; text-align:right;">
+        <button type="button" id="print-selected" class="report-button">Print</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const jobNumber = params.get('job') || '';
+    const reportRows = document.getElementById('report-rows');
+    const reportDateInput = document.getElementById('report-date');
+    const printPanel = document.getElementById('report-print-panel');
+    const reportTitle = document.getElementById('report-title');
+    const printBody = document.getElementById('report-print-body');
+    let allInspections = [];
+    let projectPrefix = '';
+    let assemblyWeightLookup = new Map();
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function formatDateTime(value) {
+      if (!value) return '—';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    }
+
+    function todayIso() {
+      const now = new Date();
+      const offset = now.getTimezoneOffset();
+      const local = new Date(now.getTime() - offset * 60000);
+      return local.toISOString().slice(0, 10);
+    }
+
+    function parseChecks(checks) {
+      try {
+        if (!checks) return {};
+        if (typeof checks === 'string') return JSON.parse(checks);
+        return checks;
+      } catch {
+        return {};
+      }
+    }
+
+    function instanceNumbersFromChecks(checks) {
+      const parsed = parseChecks(checks);
+      const values = [];
+      const nested = parsed?.instanceNumbers ?? parsed?.instanceNumber ?? parsed?.selectedInstanceNumbers ?? [];
+      if (Array.isArray(nested)) {
+        nested.forEach((value) => values.push(String(value)));
+      } else if (nested !== undefined && nested !== null) {
+        values.push(String(nested));
+      }
+      if (!values.length) {
+        const keys = Object.keys(parsed || {});
+        keys.forEach((key) => {
+          const value = parsed[key];
+          if (Array.isArray(value)) value.forEach((item) => values.push(String(item)));
+          else if (typeof value === 'number' || typeof value === 'string') values.push(String(value));
+        });
+      }
+      return [...new Set(values.filter(Boolean))];
+    }
+
+    function getAssemblyInstanceLabel(entry) {
+      const instanceNumbers = instanceNumbersFromChecks(entry.checks);
+      const assemblyBase = `${projectPrefix ? `${projectPrefix}-` : ''}${entry.assemblyMark || ''}`.replace(/-+/g, '-').replace(/^-|-$/g, '');
+      if (!assemblyBase) return '—';
+      if (!instanceNumbers.length) return assemblyBase;
+      return instanceNumbers.map((instance) => `${assemblyBase}-${instance}`).join(', ');
+    }
+
+    function getAssemblyWeight(entry) {
+      const assemblyMark = entry.assemblyMark || '';
+      const baseWeight = Number(assemblyWeightLookup.get(assemblyMark) ?? 0);
+      const instanceNumbers = instanceNumbersFromChecks(entry.checks);
+      const count = instanceNumbers.length > 0 ? instanceNumbers.length : 1;
+      const weight = baseWeight * count;
+      return Number.isFinite(weight) && weight > 0 ? `${weight.toLocaleString(undefined, { maximumFractionDigits: 3 })} kg` : '—';
+    }
+
+    function renderRows() {
+      const selectedDate = reportDateInput.value || todayIso();
+      const filtered = allInspections.filter((entry) => {
+        if (!entry.createdAt) return false;
+        const dateValue = new Date(entry.createdAt); 
+        if (Number.isNaN(dateValue.getTime())) return false;
+        return dateValue.toISOString().slice(0, 10) === selectedDate;
+      });
+
+      if (!filtered.length) {
+        reportRows.innerHTML = '<tr><td colspan="7" class="report-empty">No vendor fit-up inspections completed on this date.</td></tr>';
+        return;
+      }
+
+      reportRows.innerHTML = filtered.map((entry) => {
+        const instanceLabel = getAssemblyInstanceLabel(entry);
+        const weight = getAssemblyWeight(entry);
+        return `
+          <tr>
+            <td>${escapeHtml(instanceLabel)}</td>
+            <td>${escapeHtml(weight)}</td>
+            <td>${escapeHtml(entry.result || '—')}</td>
+            <td>${escapeHtml(entry.inspector || '—')}</td>
+            <td>${escapeHtml(entry.remarks || '—')}</td>
+            <td>${escapeHtml(formatDateTime(entry.createdAt))}</td>
+            <td><button type="button" class="report-button view-report" data-entry='${JSON.stringify(entry).replace(/'/g, '&apos;')}'>VIEW REPORT</button></td>
+          </tr>
+        `;
+      }).join('');
+
+      document.querySelectorAll('.view-report').forEach((button) => {
+        button.addEventListener('click', () => {
+          const entry = JSON.parse(button.dataset.entry.replace(/&apos;/g, "'"));
+          openPrintPanel(entry);
+        });
+      });
+    }
+
+    function openPrintPanel(entry) {
+      const instanceNumbers = instanceNumbersFromChecks(entry.checks);
+      const detailHtml = `
+        <div class="report-print-block"><strong>Job:</strong> ${escapeHtml(jobNumber)}</div>
+        <div class="report-print-block"><strong>Assembly Instance:</strong> ${escapeHtml(getAssemblyInstanceLabel(entry))}</div>
+        <div class="report-print-block"><strong>Weight:</strong> ${escapeHtml(getAssemblyWeight(entry))}</div>
+        <div class="report-print-block"><strong>Result:</strong> ${escapeHtml(entry.result || '—')}</div>
+        <div class="report-print-block"><strong>Inspector:</strong> ${escapeHtml(entry.inspector || '—')}</div>
+        <div class="report-print-block"><strong>Completed:</strong> ${escapeHtml(formatDateTime(entry.createdAt))}</div>
+        <div class="report-print-block"><strong>Remarks:</strong> ${escapeHtml(entry.remarks || '—')}</div>
+      `;
+      printBody.innerHTML = detailHtml;
+      document.getElementById('print-title').textContent = `Vendor Fitup Report - ${entry.assemblyMark || 'Assembly'}`;
+      printPanel.classList.add('show');
+      printPanel.setAttribute('aria-hidden', 'false');
+    }
+
+    function closePrintPanel() {
+      printPanel.classList.remove('show');
+      printPanel.setAttribute('aria-hidden', 'true');
+    }
+
+    document.getElementById('overview-nav').addEventListener('click', () => {
+      window.location.href = `/project.html?job=${encodeURIComponent(jobNumber)}`;
+    });
+    document.getElementById('assemblies-nav').addEventListener('click', () => {
+      window.location.href = `/assembly.html?job=${encodeURIComponent(jobNumber)}`;
+    });
+    document.getElementById('drawings-nav').addEventListener('click', () => {
+      window.location.href = `/drawings.html?job=${encodeURIComponent(jobNumber)}`;
+    });
+    document.getElementById('close-print').addEventListener('click', closePrintPanel);
+    document.getElementById('print-current').addEventListener('click', () => {
+      const selectedDate = reportDateInput.value || todayIso();
+      const filtered = allInspections.filter((entry) => {
+        if (!entry.createdAt) return false;
+        const dateValue = new Date(entry.createdAt);
+        return !Number.isNaN(dateValue.getTime()) && dateValue.toISOString().slice(0, 10) === selectedDate;
+      });
+      if (!filtered.length) return;
+      const printHtml = filtered.map((entry) => {
+        return `
+          <div style="page-break-inside:avoid; margin-bottom:16px; border:1px solid #ddd; padding:12px;">
+            <div><strong>Assembly Instance:</strong> ${escapeHtml(getAssemblyInstanceLabel(entry))}</div>
+            <div><strong>Weight:</strong> ${escapeHtml(getAssemblyWeight(entry))}</div>
+            <div><strong>Result:</strong> ${escapeHtml(entry.result || '—')}</div>
+            <div><strong>Inspector:</strong> ${escapeHtml(entry.inspector || '—')}</div>
+            <div><strong>Completed:</strong> ${escapeHtml(formatDateTime(entry.createdAt))}</div>
+            <div><strong>Remarks:</strong> ${escapeHtml(entry.remarks || '—')}</div>
+          </div>
+        `;
+      }).join('');
+      printBody.innerHTML = printHtml;
+      document.getElementById('print-title').textContent = `${jobNumber} Vendor Fitup Report`;
+      printPanel.classList.add('show');
+      printPanel.setAttribute('aria-hidden', 'false');
+      document.getElementById('print-selected').onclick = () => window.print();
+    });
+    document.getElementById('print-selected').addEventListener('click', () => window.print());
+    document.querySelector('.brand').addEventListener('click', () => { window.location.href = '/'; });
+
+    fetch('/api/auth/me')
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Not authenticated');
+        const payload = await response.json();
+        const button = document.querySelector('.user-button');
+        const displayName = payload.contractor?.contractorName || payload.contractor?.username || 'User';
+        button.textContent = displayName;
+        button.setAttribute('aria-label', `User profile: ${displayName}`);
+      })
+      .catch(() => {
+        window.location.href = '/';
+      });
+
+    document.querySelectorAll('.user-menu-wrap').forEach((menuWrap) => {
+      const button = menuWrap.querySelector('.user-button');
+      const menu = menuWrap.querySelector('.user-menu');
+      const logoutButton = menuWrap.querySelector('.logout-menu-item');
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const isHidden = menu.classList.toggle('hidden');
+        button.setAttribute('aria-expanded', String(!isHidden));
+      });
+      logoutButton.addEventListener('click', async () => {
+        try { await fetch('/api/auth/logout', { method: 'POST' }); } finally { window.location.href = '/'; }
+      });
+      document.addEventListener('click', (event) => {
+        if (!menuWrap.contains(event.target)) {
+          menu.classList.add('hidden');
+          button.setAttribute('aria-expanded', 'false');
+        }
+      });
+    });
+
+    reportDateInput.value = todayIso();
+    reportDateInput.addEventListener('change', renderRows);
+
+    if (!jobNumber) {
+      reportTitle.textContent = 'Vendor Fitup Report';
+      reportRows.innerHTML = '<tr><td colspan="7" class="report-empty">No project selected.</td></tr>';
+    } else {
+      fetch(`/api/project-inspections?job=${encodeURIComponent(jobNumber)}`)
+        .then(async (response) => {
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || 'Unable to load fit-up report');
+          return payload;
+        })
+        .then(async (payload) => {
+          allInspections = (payload.contractorInspections || []).filter((entry) => entry.inspectionType === 'VENDOR_FITUP');
+          const projectResponse = await fetch(`/api/project-detail?job=${encodeURIComponent(jobNumber)}`);
+          const projectPayload = await projectResponse.json().catch(() => ({}));
+          projectPrefix = String((projectPayload.project?.comment2 || projectPayload.project?.jobNumber || jobNumber) ?? '').trim();
+          const assemblies = Array.isArray(projectPayload.project?.assemblies) ? projectPayload.project.assemblies : [];
+          assemblyWeightLookup = new Map(assemblies.map((assembly) => [String(assembly.mainMark || '').trim(), Number(assembly.assemblyWeightEach ?? assembly.weight ?? 0)]));
+          reportTitle.textContent = `${jobNumber} Vendor Fitup Report`;
+          renderRows();
+        })
+        .catch((error) => {
+          reportRows.innerHTML = `<tr><td colspan="7" class="report-empty">${escapeHtml(error.message || 'Unable to load report.')}</td></tr>`;
+        });
+    }
+  </script>
+</body>
+</html>

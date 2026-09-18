@@ -28,6 +28,7 @@ function findDrawingPdf(root: string, fileName: string): string | null {
       const match = findDrawingPdf(entryPath, fileName);
       if (match) return match;
     }
+
   }
   return null;
 }
@@ -136,6 +137,7 @@ async function ensureAssemblyScanTables() {
       username VARCHAR(100) NOT NULL UNIQUE,
       passwordHash VARCHAR(255) NOT NULL,
       contractorName VARCHAR(255) NOT NULL,
+      userGroup VARCHAR(100) NOT NULL DEFAULT '',
       active BOOLEAN NOT NULL DEFAULT TRUE,
       canManageAccess BOOLEAN NOT NULL DEFAULT FALSE,
       createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -144,6 +146,8 @@ async function ensureAssemblyScanTables() {
   `);
   const [accessAdminColumn] = await mysqlConnection.query(`SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='contractor_users' AND COLUMN_NAME='canManageAccess' LIMIT 1`);
   if (!(accessAdminColumn as Array<Record<string, any>>).length) await mysqlConnection.query('ALTER TABLE contractor_users ADD COLUMN canManageAccess BOOLEAN NOT NULL DEFAULT FALSE');
+  const [userGroupColumn] = await mysqlConnection.query(`SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='contractor_users' AND COLUMN_NAME='userGroup' LIMIT 1`);
+  if (!(userGroupColumn as Array<Record<string, any>>).length) await mysqlConnection.query("ALTER TABLE contractor_users ADD COLUMN userGroup VARCHAR(100) NOT NULL DEFAULT ''");
 
   await mysqlConnection.query(`
     CREATE TABLE IF NOT EXISTS contractor_project_assignments (
@@ -166,6 +170,7 @@ async function ensureAssemblyScanTables() {
       CONSTRAINT fk_feature_permission_contractor FOREIGN KEY (contractorId) REFERENCES contractor_users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  await mysqlConnection.query("UPDATE contractor_feature_permissions SET featureName='SHIPPING' WHERE featureName='SHIFT_TO_PAINT'");
 
   await mysqlConnection.query(`
     CREATE TABLE IF NOT EXISTS contractor_fitup_inspections (
@@ -223,6 +228,34 @@ async function ensureAssemblyScanTables() {
       UNIQUE KEY uq_shipping_ticket_item (shippingTicketId, qrCode),
       INDEX idx_shipping_ticket_item_qr (qrCode),
       CONSTRAINT fk_shipping_ticket_items_ticket FOREIGN KEY (shippingTicketId) REFERENCES shipping_tickets(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  await mysqlConnection.query(`
+    CREATE TABLE IF NOT EXISTS shipping_ticket_receipts (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      shippingTicketId BIGINT NOT NULL,
+      qrCode VARCHAR(255) NOT NULL,
+      receivedBy BIGINT NOT NULL,
+      receivedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_shipping_ticket_receipt (shippingTicketId, qrCode),
+      INDEX idx_shipping_receipt_ticket (shippingTicketId),
+      CONSTRAINT fk_shipping_ticket_receipt_ticket FOREIGN KEY (shippingTicketId) REFERENCES shipping_tickets(id) ON DELETE CASCADE,
+      CONSTRAINT fk_shipping_ticket_receipt_user FOREIGN KEY (receivedBy) REFERENCES contractor_users(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  await mysqlConnection.query(`
+    CREATE TABLE IF NOT EXISTS shipping_ticket_returns (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      shippingTicketId BIGINT NOT NULL,
+      qrCode VARCHAR(255) NOT NULL,
+      returnedBy BIGINT NOT NULL,
+      reason VARCHAR(1000) NULL,
+      returnedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_shipping_ticket_return (shippingTicketId, qrCode),
+      CONSTRAINT fk_shipping_ticket_return_ticket FOREIGN KEY (shippingTicketId) REFERENCES shipping_tickets(id) ON DELETE CASCADE,
+      CONSTRAINT fk_shipping_ticket_return_user FOREIGN KEY (returnedBy) REFERENCES contractor_users(id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
   const bootstrapUsername = String(process.env.CONTRACTOR_BOOTSTRAP_USERNAME ?? '').trim();
@@ -618,6 +651,36 @@ const shippingTicketInput = z.object({
   remarks: z.string().trim().max(4000).optional()
 });
 
+async function getPowerFabUserGroup(username: string) {
+  const [columns] = await mysqlConnection.query(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users'
+       AND COLUMN_NAME IN ('Group', 'GroupName', 'UserGroup', 'ExternalUserGroup')
+     ORDER BY FIELD(COLUMN_NAME, 'Group', 'GroupName', 'UserGroup', 'ExternalUserGroup') LIMIT 1`
+  );
+  const column = (columns as Array<Record<string, any>>)[0]?.COLUMN_NAME;
+  if (!column) return '';
+  const [rows] = await mysqlConnection.query(`SELECT \`${column}\` AS userGroup FROM users WHERE Username = ? LIMIT 1`, [username]);
+  return String((rows as Array<Record<string, any>>)[0]?.userGroup ?? '').trim();
+}
+
+function isShippingGroup(userGroup: unknown) {
+  const normalized = String(userGroup ?? '').trim().toLowerCase();
+  return normalized === 'fabrication' || normalized === 'coating';
+}
+
+function isCoatingGroup(userGroup: unknown) {
+  return String(userGroup ?? '').trim().toLowerCase() === 'coating';
+}
+
+async function hasConfirmedShippingReceipt(qrCode: string) {
+  const [rows] = await mysqlConnection.query(
+    'SELECT 1 FROM shipping_ticket_receipts WHERE qrCode=? LIMIT 1',
+    [normalizeAssemblyQrCode(qrCode)]
+  );
+  return (rows as Array<Record<string, any>>).length > 0;
+}
+
 app.post('/api/auth/login', async (request, response) => {
   const input = contractorLoginInput.safeParse(request.body);
   if (!input.success) return response.status(400).json({ error: 'Username and password are required.' });
@@ -631,14 +694,15 @@ app.post('/api/auth/login', async (request, response) => {
   const hasRemoteLoginPermission = powerFabUser && (powerFabUser.HasLoginPermission || powerFabUser.HasRLPermission);
   if (powerFabUser && powerFabUser.Active && hasRemoteLoginPermission && verifyPowerFabPassword(input.data.password, powerFabUser.PasswordHash)) {
     const contractorName = [powerFabUser.FirstName, powerFabUser.LastName].filter(Boolean).join(' ') || powerFabUser.Username;
+    const userGroup = await getPowerFabUserGroup(powerFabUser.Username);
     await mysqlConnection.query(
-      'INSERT INTO contractor_users (username, passwordHash, contractorName, active) VALUES (?, ?, ?, TRUE) ON DUPLICATE KEY UPDATE contractorName = VALUES(contractorName), active = TRUE',
-      [powerFabUser.Username, hashContractorPassword(randomBytes(32).toString('hex')), contractorName]
+      'INSERT INTO contractor_users (username, passwordHash, contractorName, userGroup, active) VALUES (?, ?, ?, ?, TRUE) ON DUPLICATE KEY UPDATE contractorName = VALUES(contractorName), userGroup = VALUES(userGroup), active = TRUE',
+      [powerFabUser.Username, hashContractorPassword(randomBytes(32).toString('hex')), contractorName, userGroup]
     );
-    const [contractorRows] = await mysqlConnection.query('SELECT id, username, contractorName FROM contractor_users WHERE username = ? AND active = TRUE LIMIT 1', [powerFabUser.Username]);
+    const [contractorRows] = await mysqlConnection.query('SELECT id, username, contractorName, userGroup FROM contractor_users WHERE username = ? AND active = TRUE LIMIT 1', [powerFabUser.Username]);
     contractor = (contractorRows as Array<Record<string, any>>)[0];
   } else {
-    const [rows] = await mysqlConnection.query('SELECT id, username, contractorName, passwordHash FROM contractor_users WHERE username = ? AND active = TRUE LIMIT 1', [input.data.username]);
+    const [rows] = await mysqlConnection.query('SELECT id, username, contractorName, userGroup, passwordHash FROM contractor_users WHERE username = ? AND active = TRUE LIMIT 1', [input.data.username]);
     const localContractor = (rows as Array<Record<string, any>>)[0];
     if (localContractor && verifyContractorPassword(input.data.password, localContractor.passwordHash)) contractor = localContractor;
   }
@@ -648,7 +712,7 @@ app.post('/api/auth/login', async (request, response) => {
   upsertContractorSession(contractorSessionStoreFile, token, Number(contractor.id), expiresAt);
   contractorSessions.set(token, { contractorId: Number(contractor.id), expiresAt });
   response.setHeader('Set-Cookie', `powerfab_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800`);
-  response.json({ contractor: { username: contractor.username, contractorName: contractor.contractorName } });
+  response.json({ contractor: { username: contractor.username, contractorName: contractor.contractorName, userGroup: contractor.userGroup } });
 });
 
 app.post('/api/auth/logout', (request, response) => {
@@ -664,14 +728,17 @@ app.post('/api/auth/logout', (request, response) => {
 app.get('/api/auth/me', async (request, response) => {
   const contractorId = getContractorId(request);
   if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
-  const [rows] = await mysqlConnection.query('SELECT username, contractorName FROM contractor_users WHERE id = ? AND active = TRUE LIMIT 1', [contractorId]);
+  const [rows] = await mysqlConnection.query('SELECT username, contractorName, userGroup FROM contractor_users WHERE id = ? AND active = TRUE LIMIT 1', [contractorId]);
   const contractor = (rows as Array<Record<string, any>>)[0];
   if (!contractor) return response.status(401).json({ error: 'Contractor login required.' });
   const [permissionRows] = await mysqlConnection.query(
     'SELECT enabled FROM contractor_feature_permissions WHERE contractorId = ? AND featureName = ? LIMIT 1',
-    [contractorId, 'SHIFT_TO_PAINT']
+    [contractorId, 'SHIPPING']
   );
-  response.json({ contractor, permissions: { shiftToPaint: Boolean((permissionRows as Array<Record<string, any>>)[0]?.enabled) } });
+  const shippingPermission = Boolean((permissionRows as Array<Record<string, any>>)[0]?.enabled);
+  const userGroup = await getContractorGroup(contractorId);
+  contractor.userGroup = userGroup;
+  response.json({ contractor, permissions: { shipping: shippingPermission || isShippingGroup(userGroup), shiftToPaint: shippingPermission || isShippingGroup(userGroup), canConfirmReceipt: isCoatingGroup(userGroup), coatingReadOnly: isCoatingGroup(userGroup) } });
 });
 
 async function requireAccessAdmin(request: express.Request, response: express.Response) {
@@ -682,11 +749,41 @@ async function requireAccessAdmin(request: express.Request, response: express.Re
   return contractorId;
 }
 
+async function isAccessAdmin(contractorId: number) {
+  const [rows] = await mysqlConnection.query('SELECT 1 FROM contractor_users WHERE id=? AND active=TRUE AND canManageAccess=TRUE LIMIT 1', [contractorId]);
+  return (rows as Array<Record<string, any>>).length > 0;
+}
+
+async function getContractorGroup(contractorId: number) {
+  const [rows] = await mysqlConnection.query('SELECT username, userGroup FROM contractor_users WHERE id=? AND active=TRUE LIMIT 1', [contractorId]);
+  const contractor = (rows as Array<Record<string, any>>)[0];
+  const currentGroup = String(contractor?.userGroup ?? '').trim();
+  if (!contractor?.username) return currentGroup;
+  const powerFabGroup = await getPowerFabUserGroup(String(contractor.username));
+  if (powerFabGroup && powerFabGroup !== currentGroup) {
+    await mysqlConnection.query('UPDATE contractor_users SET userGroup=? WHERE id=?', [powerFabGroup, contractorId]);
+    return powerFabGroup;
+  }
+  return currentGroup;
+}
+
+async function requireCoatingUser(request: express.Request, response: express.Response) {
+  const contractorId = getContractorId(request);
+  if (!contractorId) { response.status(401).json({ error: 'Contractor login required.' }); return null; }
+  if (!isCoatingGroup(await getContractorGroup(contractorId))) {
+    response.status(403).json({ error: 'Only Coating group users can scan, confirm, or return Shipping loads.' });
+    return null;
+  }
+  return contractorId;
+}
+
 app.get('/api/admin/feature-permissions', async (request, response) => {
   if (!await requireAccessAdmin(request, response)) return;
   const [rows] = await mysqlConnection.query(`SELECT cu.id,cu.username,cu.contractorName,cu.active,cu.canManageAccess,
+    cu.userGroup,
+    COALESCE(fp.enabled,FALSE) AS shipping,
     COALESCE(fp.enabled,FALSE) AS shiftToPaint
-    FROM contractor_users cu LEFT JOIN contractor_feature_permissions fp ON fp.contractorId=cu.id AND fp.featureName='SHIFT_TO_PAINT'
+    FROM contractor_users cu LEFT JOIN contractor_feature_permissions fp ON fp.contractorId=cu.id AND fp.featureName='SHIPPING'
     ORDER BY cu.contractorName,cu.username`);
   response.json({ users: rows });
 });
@@ -695,9 +792,9 @@ app.put('/api/admin/feature-permissions/:contractorId', async (request, response
   if (!await requireAccessAdmin(request, response)) return;
   const contractorId = Number(request.params.contractorId);
   if (!Number.isInteger(contractorId) || contractorId <= 0) return response.status(400).json({ error: 'Invalid user.' });
-  const enabled = Boolean(request.body?.shiftToPaint);
-  await mysqlConnection.query(`INSERT INTO contractor_feature_permissions (contractorId,featureName,enabled) VALUES (?, 'SHIFT_TO_PAINT', ?) ON DUPLICATE KEY UPDATE enabled=VALUES(enabled)`, [contractorId, enabled]);
-  response.json({ saved: true, contractorId, shiftToPaint: enabled });
+  const enabled = Boolean(request.body?.shipping ?? request.body?.shiftToPaint);
+  await mysqlConnection.query(`INSERT INTO contractor_feature_permissions (contractorId,featureName,enabled) VALUES (?, 'SHIPPING', ?) ON DUPLICATE KEY UPDATE enabled=VALUES(enabled)`, [contractorId, enabled]);
+  response.json({ saved: true, contractorId, shipping: enabled, shiftToPaint: enabled });
 });
 
 async function loadProjectsFromDatabase() {
@@ -713,10 +810,10 @@ async function loadProjectsFromDatabase() {
       const updatedAtColumn = projectUpdatedAtColumn;
 
       if (['projects', 'productioncontroljobs', 'externalprojects'].includes(tableName.toLowerCase())) {
-        return `SELECT p.${jobColumn} AS jobNumber, p.${descriptionColumn} AS description, p.${siteColumn} AS site, p.${plantColumn} AS plant, p.${unitColumn} AS unit, p.${locationColumn} AS location, COALESCE(js.Description, 'PLANNED') AS status, p.${updatedAtColumn} AS updatedAt FROM \`${tableName}\` p LEFT JOIN jobstatuses js ON js.JobStatusID = p.${statusColumn} ORDER BY p.${updatedAtColumn} DESC LIMIT 200`;
+        return `SELECT p.${jobColumn} AS jobNumber, p.${descriptionColumn} AS description, p.${siteColumn} AS site, p.${plantColumn} AS plant, p.${unitColumn} AS unit, p.${locationColumn} AS location, COALESCE(js.Description, 'PLANNED') AS status, p.${updatedAtColumn} AS updatedAt FROM \`${tableName}\` p LEFT JOIN jobstatuses js ON js.JobStatusID = p.${statusColumn} ORDER BY p.${updatedAtColumn} DESC LIMIT 1000`;
       }
 
-      return `SELECT ${jobColumn} AS jobNumber, ${descriptionColumn} AS description, ${siteColumn} AS site, ${plantColumn} AS plant, ${unitColumn} AS unit, ${locationColumn} AS location, ${statusColumn} AS status, ${updatedAtColumn} AS updatedAt FROM \`${tableName}\` ORDER BY ${updatedAtColumn} DESC LIMIT 200`;
+      return `SELECT ${jobColumn} AS jobNumber, ${descriptionColumn} AS description, ${siteColumn} AS site, ${plantColumn} AS plant, ${unitColumn} AS unit, ${locationColumn} AS location, ${statusColumn} AS status, ${updatedAtColumn} AS updatedAt FROM \`${tableName}\` ORDER BY ${updatedAtColumn} DESC LIMIT 1000`;
     });
 
     for (const sql of rawCandidates) {
@@ -867,6 +964,10 @@ async function contractorCanAccessQr(contractorId: number, qrCode: string) {
 }
 
 async function getFitupInspectionRole(contractorId: number) {
+  const group = (await getContractorGroup(contractorId)).toLowerCase();
+  if (group === 'fabrication') return 'VENDOR_FITUP' as const;
+  if (group === 'mpl') return 'CLIENT_FITUP' as const;
+  if (group === 'coating') return 'PAINTING_INSPECTION' as const;
   const [rows] = await mysqlConnection.query(
     `SELECT u.ExternalUser
      FROM contractor_users cu
@@ -892,6 +993,48 @@ async function getFitupInspectionRole(contractorId: number) {
   if (permission === 1) return 'VENDOR_FITUP' as const;
   if (permission === 2) return 'CLIENT_FITUP' as const;
   return null;
+}
+
+type InspectionType = 'VENDOR_FITUP' | 'CLIENT_FITUP' | 'PAINTING_INSPECTION';
+
+async function getInspectionTestId(inspectionType: InspectionType) {
+  if (inspectionType === 'VENDOR_FITUP') return 1;
+  if (inspectionType === 'CLIENT_FITUP') return 2;
+  const [rows] = await mysqlConnection.query(
+    `SELECT InspectionTestID
+      FROM inspectiontests it
+      JOIN inspectionteststrings title ON title.InspectionTestStringID = it.TitleStringID
+      WHERE LOWER(title.String) LIKE '%painting%'
+        OR LOWER(title.String) LIKE '%paint%'
+     ORDER BY InspectionTestID
+     LIMIT 1`
+  );
+  return Number((rows as Array<Record<string, any>>)[0]?.InspectionTestID ?? 3);
+}
+
+async function getInspectionLocations() {
+  const [rows] = await mysqlConnection.query(
+    `SELECT l.InspectionTestLocationID AS id, s.String AS name
+     FROM inspectiontestlocations l
+     JOIN inspectionteststrings s ON s.InspectionTestStringID = l.LocationStringID
+     WHERE l.Active = 1 ORDER BY s.String`
+  );
+  return rows as Array<{ id: number; name: string }>;
+}
+
+async function getProjectInspectorContact(jobNumber: string, username: string) {
+  const [rows] = await mysqlConnection.query(
+    `SELECT pf.FirmContactID AS contactId, f.Name AS firmName, fc.Name AS contactName
+     FROM projects p
+     JOIN projectfirms pf ON pf.ProjectID = p.ProjectID
+     LEFT JOIN firms f ON f.FirmID = pf.FirmID
+     LEFT JOIN firmcontacts fc ON fc.FirmContactID = pf.FirmContactID
+     WHERE p.JobNumber = ? AND fc.Inspector = 1
+       AND LOWER(TRIM(fc.Name)) = LOWER(TRIM(?))
+     ORDER BY pf.ProjectFirmID LIMIT 1`,
+    [jobNumber, username]
+  );
+  return (rows as Array<Record<string, any>>)[0] ?? null;
 }
 
 function buildPowerFabDrawingsUrl(productionControlId: number) {
@@ -1015,7 +1158,7 @@ app.get('/api/project-detail', async (request, response) => {
     const sequenceCount = productionControlId ? await getSingleValue('SELECT COUNT(*) AS total FROM `productioncontrolsequences` WHERE `ProductionControlID` = ?', [productionControlId]) : 0;
     const categoryCount = projectId ? await getSingleValue('SELECT COUNT(DISTINCT CategoryID) AS total FROM `productioncontrolitems` WHERE `ProductionControlID` = ?', [productionControlId || 0]) : 0;
     const inspectionCount = projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `inspectiontestrecords` WHERE `ProductionControlID` = ?', [productionControlId || 0]) : 0;
-    const [shiftPermissionRows] = await mysqlConnection.query('SELECT enabled FROM contractor_feature_permissions WHERE contractorId=? AND featureName=? LIMIT 1', [contractorId, 'SHIFT_TO_PAINT']);
+    const shippingVisible = await contractorCanUseShiftToPaint(contractorId);
     const rfiCount = projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `requestforinformationdrawings` WHERE `ProjectID` = ?', [projectId]) : 0;
     const transmittalCount = projectId ? await getSingleValue('SELECT COUNT(*) AS total FROM `transmittals` WHERE `ProjectID` = ?', [projectId]) : 0;
 
@@ -1038,7 +1181,9 @@ app.get('/api/project-detail', async (request, response) => {
       productionTrackingCount: await getSingleValue('SELECT COUNT(*) AS total FROM `productioncontroljobs` WHERE `JobNumber` = ? ', [jobNumber]),
       productionStatusCount: await getSingleValue('SELECT COUNT(*) AS total FROM `productioncontroljobs` WHERE `JobNumber` = ? ', [jobNumber]),
       shippingStatusCount: await getSingleValue('SELECT COUNT(*) AS total FROM `productioncontroljobs` WHERE `JobNumber` = ? ', [jobNumber]),
-      canShiftToPaint: Boolean((shiftPermissionRows as Array<Record<string, any>>)[0]?.enabled),
+      canShiftToPaint: shippingVisible,
+      canShipping: shippingVisible,
+      canShiftToLaydownSite: shippingVisible,
       assemblies: assemblyList,
       projectId,
       drawingsUrl: buildPowerFabDrawingsUrl(productionControlId),
@@ -1076,6 +1221,7 @@ app.get('/api/project-drawings', async (request, response) => {
       `SELECT
         d.DrawingID,
         d.DrawingNumber,
+        pcj.Comment2 AS comment2,
         d.Description,
         d.ApprovalStatusID,
         COALESCE(aps.Description, '—') AS approvalStatus,
@@ -1135,10 +1281,11 @@ app.get('/api/project-drawings', async (request, response) => {
       FROM drawings d
       LEFT JOIN drawingrevisions dr ON dr.DrawingRevisionID = d.LatestDrawingRevisionID
       LEFT JOIN approvalstatuses aps ON aps.ApprovalStatusID = d.ApprovalStatusID
+      LEFT JOIN productioncontroljobs pcj ON pcj.ProductionControlID = ?
       WHERE d.ProjectID = ?
       ORDER BY d.DrawingNumber
       LIMIT 2000`,
-      [productionControlId, productionControlId, productionControlId, productionControlId, Number(project.ProjectID)]
+      [productionControlId, productionControlId, productionControlId, productionControlId, productionControlId, Number(project.ProjectID)]
     );
 
     response.json({
@@ -1146,6 +1293,7 @@ app.get('/api/project-drawings', async (request, response) => {
       drawings: (drawingRows as Array<Record<string, any>>).map((drawing) => ({
         drawingId: Number(drawing.DrawingID),
         drawingNumber: cleanPowerFabValue(drawing.DrawingNumber),
+        comment2: cleanPowerFabValue(drawing.comment2 || project.JobNumber),
         drawingLog: 'Drawing',
         revision: cleanPowerFabValue(drawing.revision),
         description: cleanPowerFabValue(drawing.Description),
@@ -1259,7 +1407,7 @@ app.get('/api/transmittal-drawings', async (request, response) => {
         approvalStatus: cleanPowerFabValue(drawing.approvalStatus),
         qrCode,
         qrUrl: assemblyId
-          ? `/api/assemblies/${encodeURIComponent(qrCode)}/qr`
+          ? `/api/assemblies/${encodeURIComponent(qrCode)}/qr?workflow=inspection`
           : `/api/drawings/${Number(drawing.DrawingID)}/qr?job=${encodeURIComponent(context.jobNumber)}`,
         qrType: assemblyId ? 'assembly' : 'drawing'
           };
@@ -1407,7 +1555,8 @@ app.get('/api/assemblies/:qrCode/qr', async (request, response) => {
   if (!qrCode) return response.status(400).send('QR code is required');
 
   try {
-    const scanUrl = `${publicAppUrl}/scan.html?qr=${encodeURIComponent(qrCode)}`;
+    const scanPage = request.query.workflow === 'inspection' ? '/inspection.html' : '/scan.html';
+    const scanUrl = `${publicAppUrl}${scanPage}?qr=${encodeURIComponent(qrCode)}`;
     const png = await QRCode.toBuffer(scanUrl, { type: 'png', width: 600, margin: 2, errorCorrectionLevel: 'H' });
     response.type('png').send(png);
   } catch (error) {
@@ -1423,8 +1572,10 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
   if (!contractorId) return response.status(401).json({ error: 'Contractor login required.' });
   if (!(await contractorCanAccessQr(contractorId, qrCode))) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
   const inspectionRole = await getFitupInspectionRole(contractorId);
-  const [contractorRows] = await mysqlConnection.query('SELECT contractorName FROM contractor_users WHERE id = ? LIMIT 1', [contractorId]);
-  const assignedContractor = (contractorRows as Array<Record<string, any>>)[0]?.contractorName ?? '';
+  if (!inspectionRole) return response.status(403).json({ error: 'Inspection permission is not granted in PowerFab.' });
+  const [contractorRows] = await mysqlConnection.query('SELECT username, contractorName FROM contractor_users WHERE id = ? LIMIT 1', [contractorId]);
+  const contractor = (contractorRows as Array<Record<string, any>>)[0] ?? {};
+  const assignedContractor = contractor.contractorName ?? '';
 
   const [rows] = await mysqlConnection.query(
     'SELECT * FROM `assembly_scan_history` WHERE `qrCode` = ? ORDER BY `createdAt` DESC',
@@ -1500,7 +1651,13 @@ app.get('/api/assemblies/:qrCode/status', async (request, response) => {
     productionControlAssemblyID: assemblyMatch?.productionControlAssemblyID ?? null,
     assemblyQuantity: assemblyMatch?.assemblyQuantity ?? 0,
     assemblyWeightEach: assemblyMatch?.assemblyWeightEach ?? 0,
-    inspectionFields: await getInspectionFields(inspectionRole === 'CLIENT_FITUP' ? 2 : 1),
+    inspectionFields: await getInspectionFields(await getInspectionTestId(inspectionRole)),
+    inspectionLocations: await getInspectionLocations(),
+    inspector: {
+      username: String(contractor.username ?? ''),
+      name: String(contractor.username ?? ''),
+      ...(await getProjectInspectorContact(jobNumber, String(contractor.username ?? '')))
+    },
     inspectionRole,
     history
   });
@@ -1581,19 +1738,19 @@ async function getAssemblyDrawing(productionControlID: number, productionControl
   return (rows as Array<Record<string, any>>)[0] ?? null;
 }
 
-async function syncInspectionToPowerFab(assembly: Record<string, any>, inspection: z.infer<typeof fitupInspectionInput>, inspectionType: 'VENDOR_FITUP' | 'CLIENT_FITUP') {
+async function syncInspectionToPowerFab(assembly: Record<string, any>, inspection: z.infer<typeof fitupInspectionInput>, inspectionType: InspectionType, contractorId: number) {
   const checks = inspection.checks ?? {};
   const instanceNumbers = String(checks.instanceNumber ?? '').split(',').map((value) => Number(value.trim())).filter((value, index, values) => value > 0 && values.indexOf(value) === index);
   const productionControlID = Number(assembly.productionControlID ?? 0);
   const productionControlAssemblyID = Number(assembly.productionControlAssemblyID ?? 0);
-  const inspectionTestId = inspectionType === 'CLIENT_FITUP' ? 2 : 1;
+  const inspectionTestId = await getInspectionTestId(inspectionType);
   if (!productionControlID || !productionControlAssemblyID) return;
 
   const [configuredTestRows] = await mysqlConnection.query(
     'SELECT StationID FROM inspectiontests WHERE InspectionTestID = ? LIMIT 1',
     [inspectionTestId]
   );
-  const inspectionStationId = Number((configuredTestRows as Array<Record<string, any>>)[0]?.StationID ?? (inspectionType === 'CLIENT_FITUP' ? 7 : 6));
+  const inspectionStationId = Number((configuredTestRows as Array<Record<string, any>>)[0]?.StationID ?? (inspectionType === 'CLIENT_FITUP' ? 7 : inspectionType === 'PAINTING_INSPECTION' ? 9 : 6));
   const [versionRows] = await mysqlConnection.query(
     `SELECT InspectionTestVersionID
      FROM inspectiontestversions
@@ -1602,7 +1759,11 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
      LIMIT 1`,
     [inspectionTestId]
   );
-  const inspectionTestVersionId = Number((versionRows as Array<Record<string, any>>)[0]?.InspectionTestVersionID ?? (inspectionType === 'CLIENT_FITUP' ? 5 : 3));
+  const inspectionTestVersionId = Number((versionRows as Array<Record<string, any>>)[0]?.InspectionTestVersionID ?? (inspectionType === 'CLIENT_FITUP' ? 5 : inspectionType === 'PAINTING_INSPECTION' ? 6 : 3));
+  const [contractorRows] = await mysqlConnection.query('SELECT username FROM contractor_users WHERE id=? LIMIT 1', [contractorId]);
+  const username = String((contractorRows as Array<Record<string, any>>)[0]?.username ?? '');
+  const inspectorContact = await getProjectInspectorContact(String(assembly.jobNumber), username);
+  const locationId = Number(inspection.checks?.inspectionLocationId ?? 0) || Number((await getInspectionLocations())[0]?.id ?? 0);
 
   const [stationRows] = await mysqlConnection.query(
     `SELECT ProductionControlItemStationID, Quantity
@@ -1656,9 +1817,9 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
   const [recordResult] = await mysqlConnection.query(
     `INSERT INTO inspectiontestrecords (
       InspectionTestID, InspectionTestVersionID, InspectionTestSubTypeID, Quantity, TestHours, TestDateTime,
-      TestUpdatedDateTime, InspectionTestLocationID, TestFailed,
+      InspectorFirmContactID, TestUpdatedDateTime, InspectionTestLocationID, TestFailed,
       ProductionControlItemStationID, ProductionControlItemStationQuantity, InstanceNumberStringID, UpdateCount
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 0)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [
       inspectionTestId,
       inspectionTestVersionId,
@@ -1666,7 +1827,9 @@ async function syncInspectionToPowerFab(assembly: Record<string, any>, inspectio
       instanceNumbers.length || Number(checks.quantity || station.Quantity || 1),
       Number(checks.testHours || 0),
       testDate,
+      inspectorContact?.contactId ?? null,
       new Date(),
+      locationId,
       inspection.result !== 'PASS' ? 1 : 0,
       Number(station.ProductionControlItemStationID),
       instanceNumbers.length || Number(checks.quantity || station.Quantity || 1),
@@ -1813,11 +1976,11 @@ async function hasCompletedVendorFitup(assembly: Record<string, any>) {
     : availableInstanceNumbers.every((value) => passedInstanceNumbers.has(value));
 }
 
-async function markAssemblyPieceTrackingComplete(assembly: Record<string, any>, checks: Record<string, unknown>, inspectionType: 'VENDOR_FITUP' | 'CLIENT_FITUP') {
+async function markAssemblyPieceTrackingComplete(assembly: Record<string, any>, checks: Record<string, unknown>, inspectionType: InspectionType) {
   const productionControlID = Number(assembly.productionControlID ?? 0);
   const productionControlAssemblyID = Number(assembly.productionControlAssemblyID ?? 0);
   if (!productionControlID || !productionControlAssemblyID) return;
-  const stationId = inspectionType === 'CLIENT_FITUP' ? 7 : 6;
+  const stationId = inspectionType === 'CLIENT_FITUP' ? 7 : inspectionType === 'PAINTING_INSPECTION' ? 9 : 6;
   const instanceNumbers = String(checks.instanceNumber ?? '').split(',').map((value) => Number(value.trim())).filter((value, index, values) => value > 0 && values.indexOf(value) === index);
   if (instanceNumbers.length > 0) {
     const [itemRows] = await mysqlConnection.query(
@@ -2035,6 +2198,10 @@ app.post('/api/assemblies/:qrCode/fitup-inspections', async (request, response) 
   if (!assembly) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
   const inspectionType = await getFitupInspectionRole(contractorId);
   if (!inspectionType) return response.status(403).json({ error: 'Fit-up inspection permission is not granted in PowerFab.' });
+  const inspectionTestId = await getInspectionTestId(inspectionType);
+  if (inspectionType === 'PAINTING_INSPECTION' && !(await hasConfirmedShippingReceipt(qrCode))) {
+    return response.status(409).json({ error: 'Assembly has not been received. Confirm receipt from the Shipping Ticket before completing Painting Inspection.' });
+  }
   if (inspectionType === 'CLIENT_FITUP' && !(await hasCompletedVendorFitup(assembly))) {
     return response.status(403).json({ error: 'Client/Fit-up Inspection is available only after Vendor/Fit-up Inspection is completed.' });
   }
@@ -2080,7 +2247,7 @@ app.post('/api/assemblies/:qrCode/fitup-inspections', async (request, response) 
     [contractorId, qrCode, assembly.jobNumber, assembly.assemblyMark, inspectionType, input.data.result, input.data.inspector, input.data.remarks ?? null, JSON.stringify(savedChecks)]
   );
   try {
-    await syncInspectionToPowerFab(assembly, inspectionData, inspectionType);
+    await syncInspectionToPowerFab(assembly, inspectionData, inspectionType, contractorId);
     if (inspectionData.result === 'PASS') await markAssemblyPieceTrackingComplete(assembly, savedChecks, inspectionType);
     await reconcileFitupInspectionStatus(Number(assembly.productionControlID ?? 0));
   } catch (error) {
@@ -2098,6 +2265,7 @@ app.get('/api/assemblies/:qrCode/fitup-inspections', async (request, response) =
   if (!assembly) return response.status(403).json({ error: 'Assembly is not assigned to this contractor.' });
   const inspectionType = await getFitupInspectionRole(contractorId);
   if (!inspectionType) return response.status(403).json({ error: 'Fit-up inspection permission is not granted in PowerFab.' });
+  const inspectionTestId = await getInspectionTestId(inspectionType);
   const [rows] = await mysqlConnection.query('SELECT id, inspectionType, result, inspector, remarks, checks, createdAt FROM contractor_fitup_inspections WHERE qrCode = ? ORDER BY createdAt DESC', [qrCode]);
   const powerFabInspections = await getPowerFabInspectionHistory(assembly);
   const availableInstanceNumbers = await getAvailableAssemblyInstanceNumbers(assembly);
@@ -2123,7 +2291,9 @@ app.get('/api/assemblies/:qrCode/fitup-inspections', async (request, response) =
     const secondRecord = second as Record<string, any>;
     return new Date(String(secondRecord.createdAt ?? 0)).getTime() - new Date(String(firstRecord.createdAt ?? 0)).getTime();
   });
-  if (inspectionType === 'VENDOR_FITUP') powerFabInspections.forEach((inspection) => {
+  if (inspectionType === 'VENDOR_FITUP' || inspectionType === 'PAINTING_INSPECTION') powerFabInspections
+    .filter((inspection) => inspection.inspectionTestId === inspectionTestId)
+    .forEach((inspection) => {
     const instanceNumbers = parseInspectionInstanceNumbers(inspection.checks);
     instanceNumbers.forEach((value) => {
       completedInstanceNumbers.add(value);
@@ -2243,6 +2413,105 @@ app.post('/api/shipping-tickets', async (request, response) => {
     response.status(500).json({ error: 'Unable to create shipping ticket.' });
   }
 });
+
+app.get('/api/shipping-tickets/:ticketNumber/qr', async (request, response) => {
+  const ticketNumber = String(request.params.ticketNumber || '').trim();
+  if (!ticketNumber) return response.status(400).send('Ticket number is required');
+  try {
+    const scanUrl = `${publicAppUrl}/shipping-receipt.html?ticket=${encodeURIComponent(ticketNumber)}`;
+    const png = await QRCode.toBuffer(scanUrl, { type: 'png', width: 600, margin: 2, errorCorrectionLevel: 'H' });
+    response.type('png').send(png);
+  } catch (error) {
+    console.error('Unable to render shipping ticket QR code', error);
+    response.status(500).send('Unable to render shipping ticket QR code');
+  }
+});
+
+app.get('/api/shipping-tickets/:ticketNumber/receipt', async (request, response) => {
+  const contractorId = await requireCoatingUser(request, response);
+  const ticketNumber = String(request.params.ticketNumber || '').trim();
+  if (!contractorId) return;
+  try {
+    const [ticketRows] = await mysqlConnection.query(
+      `SELECT id, ticketNumber, jobNumber, shippingDate, destination, remarks, createdAt
+       FROM shipping_tickets WHERE ticketNumber = ? LIMIT 1`,
+      [ticketNumber]
+    );
+    const ticket = (ticketRows as Array<Record<string, any>>)[0];
+    if (!ticket) return response.status(404).json({ error: 'Shipping ticket not found.' });
+    if (!(await contractorCanAccessJob(contractorId, String(ticket.jobNumber))) && !await isAccessAdmin(contractorId)) {
+      return response.status(403).json({ error: 'This shipping ticket is not assigned to this user.' });
+    }
+    const [itemRows] = await mysqlConnection.query(
+            `SELECT sti.qrCode, sti.assemblyMark, sti.quantity, sti.weight,
+              str.receivedBy, str.receivedAt, streturn.returnedBy, streturn.returnedAt
+       FROM shipping_ticket_items sti
+       LEFT JOIN shipping_ticket_receipts str ON str.shippingTicketId = sti.shippingTicketId AND str.qrCode = sti.qrCode
+             LEFT JOIN shipping_ticket_returns streturn ON streturn.shippingTicketId = sti.shippingTicketId AND streturn.qrCode = sti.qrCode
+       WHERE sti.shippingTicketId = ? ORDER BY sti.assemblyMark, sti.qrCode`,
+      [ticket.id]
+    );
+    response.json({ ticket, items: itemRows });
+  } catch (error) {
+    console.error('Unable to load shipping ticket receipt', error);
+    response.status(500).json({ error: 'Unable to load shipping ticket receipt.' });
+  }
+});
+
+app.post('/api/shipping-tickets/:ticketNumber/receipt', async (request, response) => {
+  const contractorId = await requireCoatingUser(request, response);
+  const ticketNumber = String(request.params.ticketNumber || '').trim();
+  const qrCodes = [...new Set(Array.isArray(request.body?.qrCodes) ? request.body.qrCodes.map((value: unknown) => String(value).trim()).filter(Boolean) : [])];
+  if (!contractorId) return;
+  if (!qrCodes.length) return response.status(400).json({ error: 'Select at least one assembly instance.' });
+  try {
+    const [ticketRows] = await mysqlConnection.query('SELECT id, jobNumber FROM shipping_tickets WHERE ticketNumber = ? LIMIT 1', [ticketNumber]);
+    const ticket = (ticketRows as Array<Record<string, any>>)[0];
+    if (!ticket) return response.status(404).json({ error: 'Shipping ticket not found.' });
+    if (!(await contractorCanAccessJob(contractorId, String(ticket.jobNumber))) && !await isAccessAdmin(contractorId)) {
+      return response.status(403).json({ error: 'This shipping ticket is not assigned to this user.' });
+    }
+    const placeholders = qrCodes.map(() => '?').join(',');
+    const [itemRows] = await mysqlConnection.query(
+      `SELECT qrCode FROM shipping_ticket_items WHERE shippingTicketId = ? AND qrCode IN (${placeholders})`,
+      [ticket.id, ...qrCodes]
+    );
+    if ((itemRows as Array<Record<string, any>>).length !== qrCodes.length) return response.status(400).json({ error: 'One or more selected assemblies are not on this ticket.' });
+    for (const qrCode of qrCodes) {
+      await mysqlConnection.query(
+        'INSERT IGNORE INTO shipping_ticket_receipts (shippingTicketId, qrCode, receivedBy) VALUES (?, ?, ?)',
+        [ticket.id, qrCode, contractorId]
+      );
+    }
+    response.json({ saved: true, receivedCount: qrCodes.length });
+  } catch (error) {
+    console.error('Unable to save shipping ticket receipt', error);
+    response.status(500).json({ error: 'Unable to save shipping ticket receipt.' });
+  }
+});
+
+app.post('/api/shipping-tickets/:ticketNumber/return', async (request, response) => {
+  const contractorId = await requireCoatingUser(request, response);
+  const ticketNumber = String(request.params.ticketNumber || '').trim();
+  const qrCodes = [...new Set(Array.isArray(request.body?.qrCodes) ? request.body.qrCodes.map((value: unknown) => String(value).trim()).filter(Boolean) : [])];
+  const reason = String(request.body?.reason ?? '').trim().slice(0, 1000) || null;
+  if (!contractorId) return;
+  if (!qrCodes.length) return response.status(400).json({ error: 'Select at least one assembly instance.' });
+  try {
+    const [ticketRows] = await mysqlConnection.query('SELECT id, jobNumber FROM shipping_tickets WHERE ticketNumber = ? LIMIT 1', [ticketNumber]);
+    const ticket = (ticketRows as Array<Record<string, any>>)[0];
+    if (!ticket) return response.status(404).json({ error: 'Shipping ticket not found.' });
+    if (!(await contractorCanAccessJob(contractorId, String(ticket.jobNumber))) && !await isAccessAdmin(contractorId)) return response.status(403).json({ error: 'This shipping ticket is not assigned to this user.' });
+    const placeholders = qrCodes.map(() => '?').join(',');
+    const [itemRows] = await mysqlConnection.query(`SELECT qrCode FROM shipping_ticket_items WHERE shippingTicketId = ? AND qrCode IN (${placeholders})`, [ticket.id, ...qrCodes]);
+    if ((itemRows as Array<Record<string, any>>).length !== qrCodes.length) return response.status(400).json({ error: 'One or more selected assemblies are not on this ticket.' });
+    for (const qrCode of qrCodes) await mysqlConnection.query('INSERT INTO shipping_ticket_returns (shippingTicketId, qrCode, returnedBy, reason) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE reason=VALUES(reason)', [ticket.id, qrCode, contractorId, reason]);
+    response.json({ saved: true, returnedCount: qrCodes.length });
+  } catch (error) {
+    console.error('Unable to save shipping ticket return', error);
+    response.status(500).json({ error: 'Unable to save shipping ticket return.' });
+  }
+});
 const optionalPaintNumber = (schema:z.ZodTypeAny) => z.preprocess(value => value === '' || value === null || value === undefined ? undefined : value, schema.optional());
 const paintLoadInput = z.object({ loadNumber:z.string().trim().min(1).max(255), topTextDescription:z.string().trim().max(255).optional(), shippedFrom:z.string().trim().max(255).optional(), destinationGroupId:optionalPaintNumber(z.coerce.number().int().positive()), plannedShipDate:z.string().trim().max(10).optional(), capacity:optionalPaintNumber(z.coerce.number().finite().nonnegative()), trailerNumber:z.string().trim().max(255).optional(), carrier:z.string().trim().max(255).optional(), driverName:z.string().trim().max(255).optional(), pickupLocation:z.string().trim().max(255).optional(), receivingLocation:z.string().trim().max(255).optional() });
 const paintLoadItemsInput = z.object({ qrCodes:z.array(z.string().trim().min(1)).min(1).max(500) });
@@ -2290,29 +2559,30 @@ async function reconcileFitupInspectionStatus(productionControlId:number){
   await mysqlConnection.query(`UPDATE productioncontrolitemstationsummaryinstancenumbers si
     JOIN productioncontrolitemstationsummary s ON s.ProductionControlItemStationSummaryID=si.ProductionControlItemStationSummaryID
     JOIN productioncontrolitems pci ON pci.ProductionControlItemID=s.ProductionControlItemID
-    JOIN inspectiontestrecords itr ON itr.InspectionTestID IN (1,2) AND itr.TestFailed=0
+    JOIN inspectiontestrecords itr ON itr.InspectionTestID IN (1,2,3) AND itr.TestFailed=0
     JOIN productioncontrolitemstations pis ON pis.ProductionControlItemStationID=itr.ProductionControlItemStationID
     JOIN inspectionteststrings its ON its.InspectionTestStringID=itr.InstanceNumberStringID
     SET si.Completed=1,si.DateCompleted=COALESCE(si.DateCompleted,CURDATE()),si.HasFailedInspectionTest=0
     WHERE pci.ProductionControlID=?
       AND REPLACE(pci.MainMark,CHAR(1),'')=REPLACE(pis.MainMark,CHAR(1),'')
-      AND s.StationID=CASE itr.InspectionTestID WHEN 1 THEN 6 WHEN 2 THEN 7 END
+      AND s.StationID=CASE itr.InspectionTestID WHEN 1 THEN 6 WHEN 2 THEN 7 WHEN 3 THEN 9 END
       AND FIND_IN_SET(CAST(si.InstanceNumber AS CHAR),REPLACE(its.String,' ',''))>0`,[productionControlId]);
   await mysqlConnection.query(`UPDATE productioncontrolitemstationsummary s
     SET s.QuantityCompleted=(SELECT COUNT(*) FROM productioncontrolitemstationsummaryinstancenumbers si WHERE si.ProductionControlItemStationSummaryID=s.ProductionControlItemStationSummaryID AND si.Completed=1),
         s.LastDateCompleted=CASE WHEN s.QuantityCompleted>0 THEN CURDATE() ELSE s.LastDateCompleted END,
         s.FailedInspectionTestQuantity=0
-    WHERE s.ProductionControlID=? AND s.StationID IN (6,7)`,[productionControlId]);
+    WHERE s.ProductionControlID=? AND s.StationID IN (6,7,9)`,[productionControlId]);
 }
 function paintAccess(request:express.Request){const job=String(request.query.job||'').trim(),cid=getContractorId(request);return {job,cid}}
 async function contractorCanUseShiftToPaint(contractorId:number){
-  const [rows]=await mysqlConnection.query('SELECT enabled FROM contractor_feature_permissions WHERE contractorId=? AND featureName=? LIMIT 1',[contractorId,'SHIFT_TO_PAINT']);
-  return Boolean((rows as Array<Record<string, any>>)[0]?.enabled);
+  const [rows]=await mysqlConnection.query('SELECT enabled FROM contractor_feature_permissions WHERE contractorId=? AND featureName=? LIMIT 1',[contractorId,'SHIPPING']);
+  return Boolean((rows as Array<Record<string, any>>)[0]?.enabled) || isShippingGroup(await getContractorGroup(contractorId));
 }
 app.use('/api/paint-loads',async(request,response,next)=>{
   const contractorId=getContractorId(request);
   if(!contractorId)return response.status(401).json({error:'Contractor login required.'});
-  if(!(await contractorCanUseShiftToPaint(contractorId)))return response.status(403).json({error:'Shift to Paint access is not enabled for this user.'});
+  if(!(await contractorCanUseShiftToPaint(contractorId)))return response.status(403).json({error:'Shipping access is not enabled for this user.'});
+  if(request.method !== 'GET' && isCoatingGroup(await getContractorGroup(contractorId))) return response.status(403).json({error:'Coating users can view loads only. Load creation, assignment, saving, shipping, reopening, and ticket creation are disabled.'});
   next();
 });
 async function clientPaintEligible(jobNumber:string,loadId=0){try{return await queryClientPaintEligible(jobNumber,loadId)}catch(error){console.error('Unable to load eligible paint assemblies',error);return []}}

@@ -27,12 +27,10 @@
       <button type="button" class="project-nav-item active">OVERVIEW</button>
       <button type="button" class="project-nav-item">ASSEMBLIES</button>
       <button type="button" id="drawings-nav" class="project-nav-item">DRAWINGS</button>
+      <button type="button" id="fitup-report-nav" class="project-nav-item">FITUP REPORT</button>
       <button type="button" class="project-nav-item">SEQUENCES</button>
-      <button type="button" class="project-nav-item">CATEGORIES</button>
       <button type="button" id="inspections-nav" class="project-nav-item">INSPECTIONS</button>
       <button type="button" class="project-nav-item">INSPECTION TEST RECORDS</button>
-      <button type="button" class="project-nav-item">PREPARED CUT LISTS</button>
-      <button type="button" class="project-nav-item">MATERIAL STATUS</button>
     </nav>
 
     <main class="detail-content">
@@ -60,12 +58,6 @@
         </article>
 
         <article class="detail-card">
-          <h2>Categories</h2>
-          <div class="detail-card-value">13</div>
-          <button type="button" class="detail-button">VIEW</button>
-        </article>
-
-        <article class="detail-card">
           <h2>Inspection Test Records</h2>
           <button type="button" id="inspections-view" class="detail-button">VIEW</button>
         </article>
@@ -76,39 +68,19 @@
           <button type="button" id="transmittals-view" class="detail-button">VIEW</button>
         </article>
 
-        <article class="detail-card">
-          <h2>Requests for Information (RFIs)</h2>
-          <button type="button" class="detail-button">VIEW</button>
-        </article>
-
-        <article class="detail-card">
-          <h2>Change Orders</h2>
-          <button type="button" class="detail-button">VIEW</button>
-        </article>
-
-        <article class="detail-card">
-          <h2>Prepared Cut Lists (0)</h2>
-          <button type="button" class="detail-button">VIEW</button>
-        </article>
-
-        <article class="detail-card">
-          <h2>Material Status</h2>
-          <button type="button" class="detail-button">VIEW</button>
-        </article>
-
-        <article class="detail-card">
-          <h2>Production Tracking</h2>
-          <button type="button" class="detail-button">VIEW</button>
-        </article>
-
         <article class="detail-card" id="production-status-card">
           <h2>Production Status</h2>
           <button type="button" id="production-status-view" class="detail-button">VIEW</button>
         </article>
 
         <article class="detail-card shipping-card">
-          <h2>Shift to Paint</h2>
+          <h2>Shipping</h2>
           <button type="button" id="shipping-status-view" class="detail-button">VIEW</button>
+        </article>
+
+        <article class="detail-card laydown-site-card">
+          <h2>Shift to Laydown / Site</h2>
+          <button type="button" id="laydown-site-view" class="detail-button">VIEW</button>
         </article>
       </div>
     </main>
@@ -155,6 +127,8 @@
         document.getElementById('transmittals-count').textContent = project.transmittalCount ?? 0;
         const shiftToPaintCard = document.getElementById('shipping-status-view')?.closest('.detail-card');
         if (shiftToPaintCard && !project.canShiftToPaint) shiftToPaintCard.remove();
+        const laydownSiteCard = document.getElementById('laydown-site-view')?.closest('.detail-card');
+        if (laydownSiteCard && !project.canShiftToLaydownSite) laydownSiteCard.remove();
 
         const countingMap = [
           ['assemblies-count', project.assemblyCount],
@@ -178,7 +152,7 @@
         const openAssemblies = () => {
           window.location.href = `/assembly.html?job=${encodeURIComponent(jobNumber)}`;
         };
-        document.querySelector('.project-nav-item:nth-of-type(2)').addEventListener('click', openAssemblies);
+        document.querySelectorAll('.project-nav-item')[1]?.addEventListener('click', openAssemblies);
         document.querySelectorAll('[data-target="assemblies"]').forEach((button) => {
           button.addEventListener('click', openAssemblies);
         });
@@ -188,11 +162,14 @@
         document.getElementById('drawings-view').addEventListener('click', openDrawings);
         const openInspections = () => { window.location.href = `/inspections.html?job=${encodeURIComponent(jobNumber)}`; };
         const openTransmittals = () => { window.location.href = `/transmittals.html?job=${encodeURIComponent(jobNumber)}`; };
+        const openFitupReport = () => { window.location.href = `/fitup-report.html?job=${encodeURIComponent(jobNumber)}`; };
+        document.getElementById('fitup-report-nav').addEventListener('click', openFitupReport);
         document.getElementById('inspections-nav').addEventListener('click', openInspections);
         document.getElementById('inspections-view').addEventListener('click', openInspections);
         document.getElementById('production-status-view').addEventListener('click', () => { window.location.href = `/production-status.html?job=${encodeURIComponent(jobNumber)}`; });
         document.getElementById('transmittals-view').addEventListener('click', openTransmittals);
         document.getElementById('shipping-status-view')?.addEventListener('click', () => { window.location.href = '/shift-to-paint.html?job=' + encodeURIComponent(jobNumber); });
+        document.getElementById('laydown-site-view')?.addEventListener('click', () => { window.location.href = '/shift-to-laydown-site.html?job=' + encodeURIComponent(jobNumber); });
 
         const brand = document.querySelector('.brand');
         if (brand) {

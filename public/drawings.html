@@ -27,6 +27,7 @@
       <button type="button" class="project-nav-item" id="overview-nav">OVERVIEW</button>
       <button type="button" class="project-nav-item" id="assemblies-nav">ASSEMBLIES</button>
       <button type="button" class="project-nav-item active">DRAWINGS</button>
+      <button type="button" class="project-nav-item" id="fitup-report-nav">FITUP REPORT</button>
     </nav>
 
     <main class="detail-content drawings-content">
@@ -42,7 +43,7 @@
       </div>
       <div class="drawings-table-wrap">
         <table class="drawings-table">
-          <thead><tr><th>PDF</th><th>Dwg #</th><th>Dwg log</th><th>Rev. #</th><th>Description</th><th>Appr. status</th><th>Assy qty</th><th>Assembly Weight Each</th><th>Assembly Weight</th><th>Sequence</th></tr></thead>
+          <thead><tr><th>PDF</th><th>Drawing No</th><th>Rev. #</th><th>Description</th><th>Appr. status</th><th>Assy qty</th><th>Assembly Weight Each</th><th>Assembly Weight</th><th>Sequence</th></tr></thead>
           <tbody id="drawing-rows"><tr><td colspan="10">Loading drawings...</td></tr></tbody>
         </table>
       </div>
@@ -78,11 +79,12 @@
       rows.innerHTML = filtered.length ? filtered.map((drawing) => {
         const assemblyWeightEach = Number (drawing.assemblyWeightEach ?? drawing.weight ?? 0);
         const assemblyWeight = Number(drawing.assemblyWeight ?? drawing.weight ?? 0);
+        const prefix = drawing.comment2 || jobNumber || 'PROJECT';
+        const prefixedNumber = drawing.drawingNumber ? `${prefix}-${drawing.drawingNumber}` : '';
         return `
         <tr>
           <td><a class="drawing-pdf" href="/api/drawings/${drawing.drawingId}/pdf" target="_blank" rel="noopener">PDF</a></td>
-          <td><strong>${escapeHtml(drawing.drawingNumber)}</strong></td>
-          <td>${escapeHtml(drawing.drawingLog)}</td>
+          <td><strong>${escapeHtml(prefixedNumber)}</strong></td>
           <td>${escapeHtml(drawing.revision)}</td>
           <td>${escapeHtml(drawing.description)}</td>
           <td>${escapeHtml(drawing.approvalStatus)}</td>
@@ -91,11 +93,12 @@
           <td>${formatWeight(assemblyWeight)}</td>
           <td>${escapeHtml(drawing.sequence)}</td>
         </tr>`;
-      }).join('') : '<tr><td colspan="10">No drawings found.</td></tr>';
+      }).join('') : '<tr><td colspan="9">No drawings found.</td></tr>';
     }
 
     document.getElementById('overview-nav').addEventListener('click', () => { window.location.href = `/project.html?job=${encodeURIComponent(jobNumber)}`; });
     document.getElementById('assemblies-nav').addEventListener('click', () => { window.location.href = `/assembly.html?job=${encodeURIComponent(jobNumber)}`; });
+    document.getElementById('fitup-report-nav').addEventListener('click', () => { window.location.href = `/fitup-report.html?job=${encodeURIComponent(jobNumber)}`; });
     document.querySelector('.brand').addEventListener('click', () => { window.location.href = '/'; });
     search.addEventListener('input', render);
     descriptionFilter.addEventListener('change', render);

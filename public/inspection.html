@@ -58,8 +58,9 @@
           <section class="inspection-tab-panel active" data-panel="data">
             <div class="inspection-field-grid">
               <label>Test Performed<input id="test-performed" type="datetime-local"></label>
-              <label>Location<input id="location"></label>
-              <label>Inspector<input id="inspector" required maxlength="255" autocomplete="name"></label>
+              <label>Location<select id="location" required></select></label>
+              <label>Inspector<input id="inspector" required maxlength="255" autocomplete="name" readonly></label>
+              <label>Inspector firm<input id="inspector-firm" readonly></label>
               <label>Test Hours<input id="test-hours" type="number" min="0" step="any"></label>
               <div id="inspection-fields" class="inspection-field-grid"></div>
               <label>Result<select id="result"><option>PASS</option><option>FAIL</option><option>HOLD</option><option>RE-INSPECTION REQUIRED</option></select></label>
@@ -182,15 +183,22 @@
         document.getElementById('drawing-number').textContent = payload.drawingNumber || '—';
         document.getElementById('instance-mark-number').textContent = payload.instanceMark || '—';
         document.getElementById('assembly-weight').textContent = `${Number(payload.assemblyWeight || 0).toLocaleString(undefined, { maximumFractionDigits: 3 })} kg`;
-        document.getElementById('inspection-heading').textContent = payload.inspectionRole === 'CLIENT_FITUP'
-          ? 'Client / Fit-up Inspection'
-          : 'Vendor / Fit-up Inspection';
+        document.getElementById('inspection-heading').textContent = payload.inspectionRole === 'PAINTING_INSPECTION'
+          ? 'Painting Inspection'
+          : payload.inspectionRole === 'CLIENT_FITUP'
+            ? 'Client / Fit-up Inspection'
+            : 'Vendor / Fit-up Inspection';
         document.getElementById('inspection-job').value = payload.jobNumber || '';
         document.getElementById('main-mark').value = payload.assemblyMark || '';
         document.getElementById('available-instances').value = (payload.availableInstanceNumbers || []).join(', ');
         document.getElementById('instance-number').value = payload.instanceNumber ? String(payload.instanceNumber) : '';
         document.getElementById('test-performed').value = indiaDateTimeInputValue();
         renderInspectionFields(payload.inspectionFields);
+        const locationSelect = document.getElementById('location');
+        locationSelect.innerHTML = '<option value="">Select location</option>' + (payload.inspectionLocations || []).map(location => `<option value="${escapeHtml(location.id)}">${escapeHtml(location.name)}</option>`).join('');
+        locationSelect.value = payload.inspectionLocations?.find(location => String(location.name).toLowerCase().includes(payload.inspectionRole === 'PAINTING_INSPECTION' ? 'painting' : 'fab-shop'))?.id || '';
+        document.getElementById('inspector').value = payload.inspector?.name || payload.inspector?.username || '';
+        document.getElementById('inspector-firm').value = payload.inspector?.firmName || '';
         details.classList.remove('hidden');
         form.classList.remove('hidden');
         document.getElementById('inspector').focus();
@@ -242,7 +250,8 @@
               instanceNumber: document.getElementById('instance-number').value,
               approvalStatus: document.getElementById('approval-status').value,
               testPerformed: document.getElementById('test-performed').value,
-              location: document.getElementById('location').value,
+              location: document.getElementById('location').selectedOptions[0]?.textContent || '',
+              inspectionLocationId: document.getElementById('location').value,
               testHours: document.getElementById('test-hours').value,
               ...getInspectionFieldValues(),
               documents: selectedDocuments,

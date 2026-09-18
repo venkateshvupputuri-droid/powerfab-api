@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Scan Shipping Ticket</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>.scan-shell{max-width:720px;margin:0 auto}.scan-input-row{display:flex;gap:10px}.scan-input-row input{flex:1;min-width:0}.camera-panel{margin-top:16px}.camera-panel video{width:100%;max-height:360px;background:#111}.scan-card{padding:20px;background:#f4f6f8;border:1px solid #c8ccd1}.scan-card button{margin-top:12px}.scan-error{color:#a21d1d}</style>
+</head>
+<body class="detail-page">
+  <div class="page-shell project-shell">
+    <main class="detail-content">
+      <div class="scan-shell">
+        <button id="back" type="button" class="secondary-button">Back to Shipping</button>
+        <h1 class="project-title">Scan Shipping Ticket QR</h1>
+        <p id="message" role="status">Scan the QR code printed on the Shipping Ticket.</p>
+        <div class="scan-card">
+          <label for="ticket-input">Ticket number or QR URL</label>
+          <div class="scan-input-row"><input id="ticket-input" type="text" autocomplete="off" placeholder="ST-20260917-ABC123"><button id="camera" type="button" class="secondary-button">Use camera</button></div>
+          <button id="open" type="button" class="detail-button">Open load details</button>
+        </div>
+        <div id="camera-panel" class="camera-panel hidden"><video id="video" autoplay playsinline muted></video><button id="stop" type="button" class="secondary-button">Stop camera</button></div>
+      </div>
+    </main>
+  </div>
+  <script>
+    const input=document.getElementById('ticket-input'),message=document.getElementById('message'),video=document.getElementById('video'),panel=document.getElementById('camera-panel');let stream=null,timer=null;
+    const ticketValue=value=>{const raw=String(value||'').trim();if(!raw)return '';try{const url=new URL(raw);return url.searchParams.get('ticket')||raw}catch{return raw}};
+    const stop=()=>{if(timer)clearInterval(timer);timer=null;if(stream)stream.getTracks().forEach(track=>track.stop());stream=null;video.srcObject=null;panel.classList.add('hidden')};
+    const openTicket=()=>{const ticket=ticketValue(input.value);if(!ticket){message.textContent='Scan or enter a Shipping Ticket number.';message.className='scan-error';return}location.href='/shipping-receipt.html?ticket='+encodeURIComponent(ticket)};
+    document.getElementById('open').onclick=openTicket;input.onkeydown=event=>{if(event.key==='Enter')openTicket()};document.getElementById('back').onclick=()=>location.href='/shift-to-paint.html?job='+encodeURIComponent(new URLSearchParams(location.search).get('job')||'');document.getElementById('stop').onclick=stop;
+    document.getElementById('camera').onclick=async()=>{if(!navigator.mediaDevices?.getUserMedia){message.textContent='Camera is not available. Enter the ticket number manually.';return}try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});video.srcObject=stream;panel.classList.remove('hidden');if(!('BarcodeDetector' in window)){message.textContent='Camera preview is active. This browser cannot decode QR automatically; enter the ticket number manually.';return}const detector=new BarcodeDetector({formats:['qr_code']});timer=setInterval(async()=>{const codes=await detector.detect(video);if(codes[0]?.rawValue){input.value=codes[0].rawValue;stop();openTicket()}},700)}catch(error){message.textContent='Unable to access the camera. Enter the ticket number manually.';message.className='scan-error'}};
+    fetch('/api/auth/me').then(response=>{if(!response.ok)throw Error();return response.json()}).then(auth=>{if(!auth.permissions?.canConfirmReceipt){message.textContent='Only Coating group users can scan Shipping Ticket QR codes.';message.className='scan-error';document.getElementById('open').disabled=true;document.getElementById('camera').disabled=true}}).catch(()=>{location.href='/?return='+encodeURIComponent(location.pathname+location.search)});
+  </script>
+</body>
+</html>

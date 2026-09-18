@@ -105,11 +105,11 @@ body.detail-page {
 }
 
 .detail-grid {
-  width: min(1180px, calc(100% - 60px));
+  width: min(1260px, calc(100% - 18px));
   margin: 0 auto;
   display: grid;
-  grid-template-columns: repeat(4, minmax(200px, 1fr));
-  gap: 26px 28px;
+  grid-template-columns: repeat(4, minmax(165px, 1fr));
+  gap: 8px 10px;
 }
 
 .detail-card {
@@ -117,8 +117,8 @@ body.detail-page {
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
-  min-height: 200px;
-  padding: 18px 16px 14px;
+  min-height: 145px;
+  padding: 8px 10px 8px;
   border: 1px solid rgba(17, 17, 17, 0.18);
   background: rgba(255,255,255,0.28);
   box-shadow: 0 2px 0 rgba(0,0,0,0.03);
@@ -126,17 +126,18 @@ body.detail-page {
 
 .detail-card h2 {
   margin: 0;
-  font-size: clamp(1.05rem, 1vw + 0.5rem, 1.5rem);
+  font-size: clamp(0.8rem, 0.6vw + 0.45rem, 1.05rem);
   font-weight: 700;
   color: #1d2a35;
   text-align: center;
+  line-height: 1.14;
 }
 
 .detail-card-value {
-  font-size: clamp(1.3rem, 1vw + 0.9rem, 2rem);
+  font-size: clamp(0.96rem, 0.8vw + 0.58rem, 1.5rem);
   font-weight: 700;
   color: #1d2a35;
-  margin: 10px 0;
+  margin: 6px 0;
 }
 
 .detail-button {
@@ -144,21 +145,22 @@ body.detail-page {
   border: 0;
   background: linear-gradient(180deg, #0d6ea7 0%, #0a5a8d 100%);
   color: #fff;
-  font-size: 0.76rem;
+  font-size: 0.62rem;
   font-weight: 700;
   letter-spacing: 0.04em;
-  padding: 12px 16px;
+  padding: 8px 10px;
   border-radius: 3px;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
 }
 
-.shipping-card {
-  grid-column: 1 / span 1;
+.shipping-card,
+.laydown-site-card {
+  grid-column: auto;
 }
 
 @media (max-width: 1100px) {
   .detail-grid {
-    grid-template-columns: repeat(2, minmax(200px, 1fr));
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
   }
 }
 
@@ -168,7 +170,7 @@ body.detail-page {
   }
 
   .detail-grid {
-    width: min(100% - 20px, 1180px);
+    width: min(100% - 20px, 1220px);
     grid-template-columns: 1fr;
   }
 }
@@ -764,12 +766,12 @@ body.detail-page {
 
 .projects-page {
   width: min(1200px, calc(100% - 100px));
-  margin: 54px auto 0;
+  margin: 20px auto 0;
 }
 
 .toolbar {
   display: grid;
-  grid-template-columns: 82px minmax(220px, 1fr) minmax(220px, 1fr) minmax(260px, 1.1fr);
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(260px, 1.1fr);
   background: rgba(243, 241, 217, 0.9);
   border: 1px solid var(--input-line);
 }
@@ -818,7 +820,7 @@ body.detail-page {
 }
 
 .job-table {
-  margin-top: 34px;
+  margin-top: 12px;
   border: 1px solid var(--table-line);
   background: rgba(255,255,255,0.18);
 }
@@ -904,11 +906,11 @@ body.detail-page {
   }
 
   .toolbar {
-    grid-template-columns: 70px repeat(2, minmax(180px, 1fr));
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
   }
 
   .field-control-search {
-    grid-column: 2 / -1;
+    grid-column: 1 / -1;
   }
 }
 
