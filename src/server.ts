@@ -1165,6 +1165,7 @@ app.get('/api/project-detail', async (request, response) => {
 
     const detail = {
       jobNumber: project.JobNumber ?? jobNumber,
+      comment2: cleanPowerFabValue(productionControl?.Comment2 ?? project.JobNumber ?? jobNumber),
       jobDescription: project.JobDescription ?? '',
       jobLocation: project.JobLocation ?? '',
       plant: project.GroupName ?? '',
