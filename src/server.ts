@@ -1131,11 +1131,13 @@ app.get('/api/project-detail', async (request, response) => {
 
       const assemblyWeightEach = Number(row.AssemblyWeightEach ?? 0);
       const assemblyWeight = Number((assemblyWeightEach * qty).toFixed(3));
+      const mainMark = cleanPowerFabValue(row.MainMark ?? '—');
 
       return {
         productionControlAssemblyId,
-        mainMark: cleanPowerFabValue(row.MainMark ?? '—'),
-        drawingNumber: cleanPowerFabValue(row.MainMark ?? '—'),
+        mainMark,
+        drawingNumber: mainMark,
+        assemblyInstance: `${jobNumber}-${mainMark}`,
         assemblyQuantity: qty,
         totalQty: qty,
         weight: assemblyWeight,
