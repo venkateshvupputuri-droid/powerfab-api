@@ -1440,7 +1440,7 @@ app.get('/api/project-inspections', async (request, response) => {
     [await getSingleValue('SELECT ProductionControlID FROM productioncontroljobs WHERE JobNumber = ? LIMIT 1', [context.jobNumber])]
   );
   const [portalRows] = await mysqlConnection.query(
-    `SELECT id, qrCode, assemblyMark, inspectionType, result, inspector, remarks, createdAt
+    `SELECT id, qrCode, assemblyMark, inspectionType, result, inspector, remarks, checks, createdAt
      FROM contractor_fitup_inspections WHERE jobNumber = ? ORDER BY createdAt DESC LIMIT 1000`,
     [context.jobNumber]
   );

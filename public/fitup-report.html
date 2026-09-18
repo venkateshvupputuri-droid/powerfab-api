@@ -144,17 +144,20 @@
       const parsed = parseChecks(checks);
       const values = [];
       const nested = parsed?.instanceNumbers ?? parsed?.instanceNumber ?? parsed?.selectedInstanceNumbers ?? [];
+      const addValues = (value) => {
+        if (Array.isArray(value)) value.forEach(addValues);
+        else if (value !== undefined && value !== null) String(value).split(',').forEach((item) => values.push(item.trim()));
+      };
       if (Array.isArray(nested)) {
-        nested.forEach((value) => values.push(String(value)));
+        addValues(nested);
       } else if (nested !== undefined && nested !== null) {
-        values.push(String(nested));
+        addValues(nested);
       }
       if (!values.length) {
         const keys = Object.keys(parsed || {});
         keys.forEach((key) => {
           const value = parsed[key];
-          if (Array.isArray(value)) value.forEach((item) => values.push(String(item)));
-          else if (typeof value === 'number' || typeof value === 'string') values.push(String(value));
+          if (key !== 'instanceNumber' && key !== 'instanceNumbers' && key !== 'selectedInstanceNumbers') addValues(value);
         });
       }
       return [...new Set(values.filter(Boolean))];
