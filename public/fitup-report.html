@@ -71,8 +71,8 @@
         <table class="report-table">
           <thead>
             <tr>
-              <th>Mark No.</th>
-              <th>Assembly Instance</th>
+              <th>Drawing #</th>
+              <th>Instance mark no</th>
               <th>Weight</th>
               <th>Result</th>
               <th>Inspector</th>
@@ -162,10 +162,14 @@
 
     function getAssemblyInstanceLabel(entry) {
       const instanceNumbers = instanceNumbersFromChecks(entry.checks);
-      const assemblyBase = `${projectPrefix ? `${projectPrefix}-` : ''}${entry.assemblyMark || ''}`.replace(/-+/g, '-').replace(/^-|-$/g, '');
+      const assemblyBase = getDrawingNumber(entry);
       if (!assemblyBase) return '—';
       if (!instanceNumbers.length) return assemblyBase;
       return instanceNumbers.map((instance) => `${assemblyBase}-${instance}`).join(', ');
+    }
+
+    function getDrawingNumber(entry) {
+      return `${projectPrefix ? `${projectPrefix}-` : ''}${entry.assemblyMark || ''}`.replace(/-+/g, '-').replace(/^-|-$/g, '');
     }
 
     function getAssemblyWeight(entry) {
@@ -196,7 +200,7 @@
         const weight = getAssemblyWeight(entry);
         return `
           <tr>
-            <td>${escapeHtml(entry.assemblyMark || '—')}</td>
+            <td>${escapeHtml(getDrawingNumber(entry) || '—')}</td>
             <td>${escapeHtml(instanceLabel)}</td>
             <td>${escapeHtml(weight)}</td>
             <td>${escapeHtml(entry.result || '—')}</td>

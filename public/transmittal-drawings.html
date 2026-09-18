@@ -21,8 +21,14 @@
         <div class="user-menu hidden" role="menu" aria-label="User menu"><button type="button" class="user-menu-item logout-menu-item">Logout</button></div>
       </div>
     </header>
-    <nav class="project-nav">
-      <button type="button" class="project-nav-item" id="back-nav">TRANSMITTALS</button>
+    <nav class="project-nav" aria-label="Project sections">
+      <button type="button" id="overview-nav" class="project-nav-item">OVERVIEW</button>
+      <button type="button" id="assemblies-nav" class="project-nav-item">ASSEMBLIES</button>
+      <button type="button" id="drawings-nav" class="project-nav-item active">DRAWINGS</button>
+      <button type="button" id="fitup-report-nav" class="project-nav-item">FITUP REPORT</button>
+      <button type="button" class="project-nav-item">SEQUENCES</button>
+      <button type="button" id="inspections-nav" class="project-nav-item">INSPECTIONS</button>
+      <button type="button" class="project-nav-item">INSPECTION TEST RECORDS</button>
     </nav>
     <main class="detail-content drawings-content assigned-drawings-content">
       <h1 id="page-title" class="project-title">Loading assigned drawings...</h1>
@@ -149,7 +155,11 @@
       }, { once: true });
     }
 
-    document.getElementById('back-nav').onclick = () => { window.location.href = `/transmittals.html?job=${encodeURIComponent(jobNumber)}`; };
+    document.getElementById('overview-nav').onclick = () => { window.location.href = `/project.html?job=${encodeURIComponent(jobNumber)}`; };
+    document.getElementById('assemblies-nav').onclick = () => { window.location.href = `/assembly.html?job=${encodeURIComponent(jobNumber)}`; };
+    document.getElementById('drawings-nav').onclick = () => { window.location.href = `/drawings.html?job=${encodeURIComponent(jobNumber)}`; };
+    document.getElementById('fitup-report-nav').onclick = () => { window.location.href = `/fitup-report.html?job=${encodeURIComponent(jobNumber)}`; };
+    document.getElementById('inspections-nav').onclick = () => { window.location.href = `/inspections.html?job=${encodeURIComponent(jobNumber)}`; };
     search.addEventListener('input', render);
     descriptionFilter.addEventListener('change', render);
     document.getElementById('select-all').onclick = () => { const checks = [...document.querySelectorAll('.drawing-check')]; const shouldSelect = checks.some((check) => !check.checked); checks.forEach((check) => { check.checked = shouldSelect; }); };
