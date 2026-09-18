@@ -144,7 +144,8 @@
     }
 
     function renderHistory(inspections) {
-      historyList.innerHTML = inspections.map((inspection) => `<article class="inspection-history-item"><strong>${escapeHtml(inspection.result)}</strong><span>${escapeHtml(inspection.inspector)} · ${escapeHtml(inspection.createdAt)}</span><p>${escapeHtml(inspection.remarks || 'No remarks')}</p></article>`).join('');
+      const visibleInspections = inspections.filter((inspection) => inspection.source !== 'PowerFab');
+      historyList.innerHTML = visibleInspections.map((inspection) => `<article class="inspection-history-item"><strong>${escapeHtml(inspection.result)}</strong><span>${escapeHtml(inspection.inspector)} · ${escapeHtml(inspection.createdAt)}</span><p>${escapeHtml(inspection.remarks || 'No remarks')}</p></article>`).join('');
       historyPanel.classList.remove('hidden');
     }
 
@@ -207,7 +208,7 @@
         if (existingResponse.ok) {
           const existing = await existingResponse.json();
           renderHistory(existing.inspections || []);
-          const stored = existing.inspections?.[0]?.checks || {};
+          const stored = existing.inspections?.find((inspection) => inspection.source !== 'PowerFab')?.checks || {};
           const previous = typeof stored === 'string' ? JSON.parse(stored) : stored;
           Object.entries(previous).forEach(([key, value]) => {
             const field = document.getElementById(key === 'instanceNumber' ? 'instance-number' : key);
