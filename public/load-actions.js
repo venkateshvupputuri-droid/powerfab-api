@@ -173,7 +173,7 @@
         .filter(row => row.querySelectorAll('td').length >= 3)
         .map(row => {
           const cells = [...row.querySelectorAll('td')].map(cell => printEscape(cell.textContent.trim()));
-          return `<tr><td>${cells[0]}</td><td>${cells[1]}</td><td>${cells[2]}</td></tr>`;
+          return `<tr><td>${cells[1]}</td><td>${cells[0]}</td><td>${cells[2]}</td></tr>`;
         }).join('');
       const totalInstances = [...document.querySelectorAll('#summary-assemblies tr')]
         .filter(row => row.querySelectorAll('td').length >= 3).length;
@@ -183,7 +183,7 @@
       const qrUrl = `/api/shipping-tickets/${encodeURIComponent(payload.ticketNumber)}/qr`;
       const popup = window.open('', 'shipping-ticket', 'width=900,height=700');
       if (!popup) throw new Error('Allow pop-ups to print the shipping ticket.');
-      popup.document.write(`<!doctype html><title>Shipping Ticket ${printEscape(payload.ticketNumber)}</title><style>body{font:14px Arial;padding:28px}header{display:flex;justify-content:space-between;align-items:flex-start}header img{width:140px;height:140px}.ticket-summary{line-height:1.5;margin-top:16px}table{width:100%;border-collapse:collapse;margin-top:22px}th,td{border:1px solid #777;padding:8px;text-align:left}th{background:#eee}@media print{button{display:none}}</style><header><div><h1>Shipping Ticket</h1><div><b>Job:</b> ${printEscape(job)}<br><b>Ticket:</b> ${printEscape(payload.ticketNumber)}<br><b>Planned ship date:</b> ${printEscape(value('ship-date') || '—')}</div><div class="ticket-summary"><b>Total instances:</b> ${totalInstances}<br><b>Total weight:</b> ${totalWeight.toLocaleString(undefined, { maximumFractionDigits: 3 })} kg</div></div><img src="${qrUrl}" alt="Scan to confirm receipt"></header><p>Scan the QR code to confirm individual assembly receipt at the painting yard.</p><table><thead><tr><th>Assembly instance</th><th>Assembly</th><th>Weight</th></tr></thead><tbody>${rows || '<tr><td colspan="3">No assemblies assigned</td></tr>'}</tbody></table>`);
+      popup.document.write(`<!doctype html><title>Shipping Ticket ${printEscape(payload.ticketNumber)}</title><style>body{font:14px Arial;padding:28px}header{display:flex;justify-content:space-between;align-items:flex-start}header img{width:140px;height:140px}.ticket-summary{line-height:1.5;margin-top:16px}table{width:100%;border-collapse:collapse;margin-top:22px}th,td{border:1px solid #777;padding:8px;text-align:left}th{background:#eee}.ticket-total{margin-top:14px;font-weight:700}@media print{button{display:none}}</style><header><div><h1>Shipping Ticket</h1><div><b>Job:</b> ${printEscape(job)}<br><b>Ticket:</b> ${printEscape(payload.ticketNumber)}<br><b>Planned ship date:</b> ${printEscape(value('ship-date') || '—')}</div></div><img src="${qrUrl}" alt="Scan to confirm receipt"></header><p>Scan the QR code to confirm individual assembly receipt at the painting yard.</p><table><thead><tr><th>Assembly</th><th>Assembly instance</th><th>Weight</th></tr></thead><tbody>${rows || '<tr><td colspan="3">No assemblies assigned</td></tr>'}</tbody></table><div class="ticket-total">Total instances: ${totalInstances}<br>Total weight: ${totalWeight.toLocaleString(undefined, { maximumFractionDigits: 3 })} kg</div>`);
       popup.document.close();
       popup.focus();
       popup.print();
