@@ -201,6 +201,17 @@ async function ensureAssemblyScanTables() {
        ADD COLUMN inspectionType VARCHAR(30) NOT NULL DEFAULT 'VENDOR_FITUP'`
     );
   }
+  const [inspectionJobDateIndexes] = await mysqlConnection.query(
+    `SELECT 1 FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'contractor_fitup_inspections' AND INDEX_NAME = 'idx_fitup_job_created'
+     LIMIT 1`
+  );
+  if (!(inspectionJobDateIndexes as Array<Record<string, any>>).length) {
+    await mysqlConnection.query(
+      `ALTER TABLE contractor_fitup_inspections
+       ADD INDEX idx_fitup_job_created (jobNumber, createdAt)`
+    );
+  }
 
   await mysqlConnection.query(`
     CREATE TABLE IF NOT EXISTS shipping_tickets (
