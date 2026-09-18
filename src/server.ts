@@ -1137,7 +1137,6 @@ app.get('/api/project-detail', async (request, response) => {
         productionControlAssemblyId,
         mainMark,
         drawingNumber: mainMark,
-        assemblyInstance: `${jobNumber}-${mainMark}`,
         assemblyQuantity: qty,
         totalQty: qty,
         weight: assemblyWeight,

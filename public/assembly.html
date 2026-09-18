@@ -48,7 +48,6 @@
             <tr>
               <th>Main Mark</th>
               <th>Drawing No</th>
-              <th>Assembly Instance</th>
               <th>Assy Qty</th>
               <th>Assembly Weight Each</th>
               <th>Assembly Weight</th>
@@ -198,7 +197,6 @@
               <tr>
                 <td><strong>${item.mainMark || '—'}</strong></td>
                 <td>${item.drawingNumber || item.mainMark || '—'}</td>
-                <td><strong>${item.assemblyInstance || '—'}</strong></td>
                 <td>${qty}</td>
                 <td>${formatWeight(assemblyWeightEach)}</td>
                 <td>${formatWeight(assemblyWeight)}</td>
@@ -214,7 +212,7 @@
           searchInput.addEventListener('input', () => {
             const q = (searchInput.value || '').trim().toLowerCase();
             const filtered = allAssemblyRows.filter((item) => {
-              const text = `${item.mainMark || ''} ${item.drawingNumber || ''} ${item.assemblyInstance || ''}`.toLowerCase();
+              const text = `${item.mainMark || ''} ${item.drawingNumber || ''}`.toLowerCase();
               return !q || text.includes(q);
             });
             renderRows(filtered);

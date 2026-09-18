@@ -71,6 +71,7 @@
         <table class="report-table">
           <thead>
             <tr>
+              <th>Mark No.</th>
               <th>Assembly Instance</th>
               <th>Weight</th>
               <th>Result</th>
@@ -186,7 +187,7 @@
       });
 
       if (!filtered.length) {
-        reportRows.innerHTML = '<tr><td colspan="7" class="report-empty">No vendor fit-up inspections completed on this date.</td></tr>';
+        reportRows.innerHTML = '<tr><td colspan="8" class="report-empty">No vendor fit-up inspections completed on this date.</td></tr>';
         return;
       }
 
@@ -195,6 +196,7 @@
         const weight = getAssemblyWeight(entry);
         return `
           <tr>
+            <td>${escapeHtml(entry.assemblyMark || '—')}</td>
             <td>${escapeHtml(instanceLabel)}</td>
             <td>${escapeHtml(weight)}</td>
             <td>${escapeHtml(entry.result || '—')}</td>
@@ -313,7 +315,7 @@
 
     if (!jobNumber) {
       reportTitle.textContent = 'Vendor Fitup Report';
-      reportRows.innerHTML = '<tr><td colspan="7" class="report-empty">No project selected.</td></tr>';
+      reportRows.innerHTML = '<tr><td colspan="8" class="report-empty">No project selected.</td></tr>';
     } else {
       fetch(`/api/project-inspections?job=${encodeURIComponent(jobNumber)}`)
         .then(async (response) => {
@@ -332,7 +334,7 @@
           renderRows();
         })
         .catch((error) => {
-          reportRows.innerHTML = `<tr><td colspan="7" class="report-empty">${escapeHtml(error.message || 'Unable to load report.')}</td></tr>`;
+          reportRows.innerHTML = `<tr><td colspan="8" class="report-empty">${escapeHtml(error.message || 'Unable to load report.')}</td></tr>`;
         });
     }
   </script>
