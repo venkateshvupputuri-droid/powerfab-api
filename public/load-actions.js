@@ -32,19 +32,6 @@
   document.title = document.title.replace(/Shift to Paint/g, 'Shipping');
   fetch('/api/auth/me').then(response => response.ok ? response.json() : null).then(auth => {
     if (!auth?.permissions?.canConfirmReceipt) scanButton.remove();
-    if (auth?.permissions?.coatingReadOnly) {
-      document.querySelectorAll('button').forEach(button => {
-        if (button.textContent.trim() === 'Create New Load') button.remove();
-      });
-      coatingReadOnly = true;
-      document.getElementById('create')?.classList.add('hidden');
-      ['new-load', 'save-load', 'delete-load', 'help-load', 'ship', 'summary-ship', 'ticket', 'summary-ticket', 'add-material'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
-      document.querySelectorAll('[data-action]').forEach(element => element.classList.add('hidden'));
-      document.querySelector('#if button[type="submit"]')?.classList.add('hidden');
-      document.getElementById('summary-reopen')?.remove();
-      document.querySelectorAll('.load-footer-actions, .ship-row').forEach(element => element.classList.add('hidden'));
-      document.querySelectorAll('input, select, textarea').forEach(element => element.disabled = true);
-    }
   }).catch(() => scanButton.remove());
 
   if (destinationMode) {

@@ -805,7 +805,7 @@ app.get('/api/auth/me', async (request, response) => {
   const shippingPermission = Boolean((permissionRows as Array<Record<string, any>>)[0]?.enabled);
   const userGroup = await getContractorGroup(contractorId);
   contractor.userGroup = userGroup;
-  response.json({ contractor, permissions: { shipping: shippingPermission || isShippingGroup(userGroup), shiftToPaint: shippingPermission || isShippingGroup(userGroup), canConfirmReceipt: isCoatingGroup(userGroup), coatingReadOnly: isCoatingGroup(userGroup) } });
+  response.json({ contractor, permissions: { shipping: shippingPermission || isShippingGroup(userGroup), shiftToPaint: shippingPermission || isShippingGroup(userGroup), canConfirmReceipt: isCoatingGroup(userGroup) } });
 });
 
 async function requireAccessAdmin(request: express.Request, response: express.Response) {
@@ -2655,7 +2655,6 @@ app.use('/api/paint-loads',async(request,response,next)=>{
   const contractorId=getContractorId(request);
   if(!contractorId)return response.status(401).json({error:'Contractor login required.'});
   if(!(await contractorCanUseShiftToPaint(contractorId)))return response.status(403).json({error:'Shipping access is not enabled for this user.'});
-  if(request.method !== 'GET' && isCoatingGroup(await getContractorGroup(contractorId))) return response.status(403).json({error:'Coating users can view loads only. Load creation, assignment, saving, shipping, reopening, and ticket creation are disabled.'});
   next();
 });
 async function clientPaintEligible(jobNumber:string,loadId=0){try{return await queryClientPaintEligible(jobNumber,loadId)}catch(error){console.error('Unable to load eligible paint assemblies',error);return []}}
