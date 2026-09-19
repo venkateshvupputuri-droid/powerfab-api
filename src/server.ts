@@ -1492,6 +1492,8 @@ app.get('/api/transmittal-drawings', async (request, response) => {
 app.get('/api/project-inspections', async (request, response) => {
   const context = await getAuthorizedProject(request, response);
   if (!context) return;
+  const productionControlId = await getSingleValue('SELECT ProductionControlID FROM productioncontroljobs WHERE JobNumber = ? LIMIT 1', [context.jobNumber]);
+  await reconcileFitupInspectionStatus(Number(productionControlId));
   const [powerFabRows] = await mysqlConnection.query(
     `SELECT itr.InspectionTestRecordID, itr.InspectionTestID, itr.TestDateTime, itr.TestUpdatedDateTime,
             itr.TestFailed, itr.Quantity, it.InspectionTestID,
@@ -1504,7 +1506,7 @@ app.get('/api/project-inspections', async (request, response) => {
      WHERE pis.ProductionControlID = ?
      ORDER BY itr.TestDateTime DESC
      LIMIT 1000`,
-    [await getSingleValue('SELECT ProductionControlID FROM productioncontroljobs WHERE JobNumber = ? LIMIT 1', [context.jobNumber])]
+    [productionControlId]
   );
   const [portalRows] = await mysqlConnection.query(
     `SELECT id, qrCode, assemblyMark, inspectionType, result, inspector, remarks, checks, createdAt
