@@ -692,6 +692,62 @@ async function hasConfirmedShippingReceipt(qrCode: string) {
   return (rows as Array<Record<string, any>>).length > 0;
 }
 
+async function syncShippingInstanceState(qrCode: string, state: 'received' | 'returned') {
+  const assembly = await findAssemblyRecordByQrCode(qrCode);
+  if (!assembly || !assembly.instanceNumber) return false;
+
+  const instanceFilter = [
+    assembly.productionControlID,
+    assembly.productionControlAssemblyID,
+    assembly.instanceNumber
+  ];
+  if (state === 'received') {
+    await mysqlConnection.query(
+      `UPDATE productioncontroltrucks t
+       JOIN productioncontrolitemtrucks pit ON pit.TruckID = t.TruckID
+       JOIN productioncontrolitems pci ON pci.ProductionControlID = pit.ProductionControlID
+        AND pci.MainMark = pit.MainMark
+       JOIN productioncontrolitemtruckinstancenumbers pi ON pi.ProductionControlItemTruckID = pit.ProductionControlItemTruckID
+        AND pi.ProductionControlItemID = pci.ProductionControlItemID
+       SET t.DateReceived = COALESCE(t.DateReceived, CURDATE()), t.RecalculateTruckTotals = 1
+       WHERE pit.ProductionControlID = ? AND pci.ProductionControlAssemblyID = ? AND pi.InstanceNumber = ?`,
+      instanceFilter
+    );
+  } else {
+    await mysqlConnection.query(
+      `UPDATE productioncontrolitemtruckinstancenumbers pi
+       JOIN productioncontrolitemtrucks pit ON pit.ProductionControlItemTruckID = pi.ProductionControlItemTruckID
+       JOIN productioncontrolitems pci ON pci.ProductionControlItemID = pi.ProductionControlItemID
+       SET pi.DateReturned = COALESCE(pi.DateReturned, CURDATE()),
+           pit.QuantityReturned = LEAST(pit.Quantity, pit.QuantityReturned + 1),
+           pit.RecalculateTruckTotals = 1
+       WHERE pit.ProductionControlID = ? AND pci.ProductionControlAssemblyID = ? AND pi.InstanceNumber = ?`,
+      instanceFilter
+    );
+    await mysqlConnection.query(
+      `UPDATE productioncontroltrucks t
+       SET t.QuantityReturned = (
+         SELECT COALESCE(SUM(pit.QuantityReturned), 0)
+         FROM productioncontrolitemtrucks pit
+         WHERE pit.TruckID = t.TruckID
+       ), t.RecalculateTruckTotals = 1
+       WHERE t.TruckID IN (
+         SELECT truckId FROM (
+           SELECT DISTINCT pit2.TruckID AS truckId
+           FROM productioncontrolitemtrucks pit2
+           JOIN productioncontrolitems pci2 ON pci2.ProductionControlID = pit2.ProductionControlID
+            AND pci2.MainMark = pit2.MainMark
+           JOIN productioncontrolitemtruckinstancenumbers pi2 ON pi2.ProductionControlItemTruckID = pit2.ProductionControlItemTruckID
+            AND pi2.ProductionControlItemID = pci2.ProductionControlItemID
+           WHERE pit2.ProductionControlID = ? AND pci2.ProductionControlAssemblyID = ? AND pi2.InstanceNumber = ?
+         ) matchingTrucks
+       )`,
+      instanceFilter
+    );
+  }
+  return true;
+}
+
 app.post('/api/auth/login', async (request, response) => {
   const input = contractorLoginInput.safeParse(request.body);
   if (!input.success) return response.status(400).json({ error: 'Username and password are required.' });
@@ -2495,6 +2551,7 @@ app.post('/api/shipping-tickets/:ticketNumber/receipt', async (request, response
         'INSERT IGNORE INTO shipping_ticket_receipts (shippingTicketId, qrCode, receivedBy) VALUES (?, ?, ?)',
         [ticket.id, qrCode, contractorId]
       );
+      await syncShippingInstanceState(String(qrCode), 'received');
     }
     response.json({ saved: true, receivedCount: qrCodes.length });
   } catch (error) {
@@ -2518,7 +2575,10 @@ app.post('/api/shipping-tickets/:ticketNumber/return', async (request, response)
     const placeholders = qrCodes.map(() => '?').join(',');
     const [itemRows] = await mysqlConnection.query(`SELECT qrCode FROM shipping_ticket_items WHERE shippingTicketId = ? AND qrCode IN (${placeholders})`, [ticket.id, ...qrCodes]);
     if ((itemRows as Array<Record<string, any>>).length !== qrCodes.length) return response.status(400).json({ error: 'One or more selected assemblies are not on this ticket.' });
-    for (const qrCode of qrCodes) await mysqlConnection.query('INSERT INTO shipping_ticket_returns (shippingTicketId, qrCode, returnedBy, reason) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE reason=VALUES(reason)', [ticket.id, qrCode, contractorId, reason]);
+    for (const qrCode of qrCodes) {
+      await mysqlConnection.query('INSERT INTO shipping_ticket_returns (shippingTicketId, qrCode, returnedBy, reason) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE reason=VALUES(reason)', [ticket.id, qrCode, contractorId, reason]);
+      await syncShippingInstanceState(String(qrCode), 'returned');
+    }
     response.json({ saved: true, returnedCount: qrCodes.length });
   } catch (error) {
     console.error('Unable to save shipping ticket return', error);
