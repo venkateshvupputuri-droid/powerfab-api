@@ -75,7 +75,7 @@
 
         <article class="detail-card shipping-card">
           <h2>Shipping</h2>
-          <button type="button" id="shipping-status-view" class="detail-button">VIEW</button>
+          <button type="button" id="shipping-status-view" class="detail-button">CREATE LOAD</button>
         </article>
 
         <article class="detail-card laydown-site-card">
@@ -169,6 +169,7 @@
         document.getElementById('production-status-view').addEventListener('click', () => { window.location.href = `/production-status.html?job=${encodeURIComponent(jobNumber)}`; });
         document.getElementById('transmittals-view').addEventListener('click', openTransmittals);
         document.getElementById('shipping-status-view')?.addEventListener('click', () => { window.location.href = '/shift-to-paint.html?job=' + encodeURIComponent(jobNumber); });
+          document.getElementById('shipping-status-view')?.addEventListener('click', () => { window.location.href = '/shift-to-paint.html?job=' + encodeURIComponent(jobNumber) + '&new=1'; });
         document.getElementById('laydown-site-view')?.addEventListener('click', () => { window.location.href = '/shift-to-laydown-site.html?job=' + encodeURIComponent(jobNumber); });
 
         const brand = document.querySelector('.brand');
